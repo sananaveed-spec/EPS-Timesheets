@@ -451,6 +451,17 @@ function isInternalAdminWork(description: string): boolean {
   );
 }
 
+function isFutureBillableProject(projectLabel: string): boolean {
+  return /future\s+billable/i.test(projectLabel);
+}
+
+/** True when the Internal note section already marks work as non-billable. */
+function internalNoteSaysNonBillable(description: string): boolean {
+  const idx = description.search(/\binternal\s+note\b/i);
+  if (idx < 0) return false;
+  return /non[-\s]?billable/i.test(description.slice(idx));
+}
+
 function splitRowsByUser(rows: PivotRow[]): { name: string; rows: PivotRow[] }[] {
   const sections: { name: string; rows: PivotRow[] }[] = [];
   let current: PivotRow[] = [];
@@ -806,6 +817,8 @@ export function proposeHighlights(
       }
 
       const jobWalkSentence = sentenceContaining(desc, [/\bjob\s+walk\b/i]);
+      const projectAlreadyFutureBillable =
+        isFutureBillableProject(currentProjectLabel);
 
       // Uncertain "future billable?" in the description (question mark or parenthesised)
       const uncertainFutureSentence = sentenceContaining(desc, [
@@ -813,7 +826,8 @@ export function proposeHighlights(
         /\(\s*future\s+billable\s*\?\s*\)/i,
       ]);
 
-      // Explicit FUTURE BILLABLE label (project name or description statement)
+      // Explicit FUTURE BILLABLE in the description (not the project name —
+      // already-coded Future Billable projects should not get a Move-to highlight).
       const explicitFutureSentence =
         (proposalJobWalk
           ? jobWalkSentence || desc.trim()
@@ -823,14 +837,11 @@ export function proposeHighlights(
               /\(?\s*FUTURE\s+BILLABLE\s*\)?/i,
               /future\s+billable/i,
             ])
-          : null) ||
-        (/FUTURE\s+BILLABLE/i.test(currentProjectLabel)
-          ? currentProjectLabel.trim()
           : null);
 
       const futureSentence = uncertainFutureSentence || explicitFutureSentence;
       if (futureSentence) {
-        let futureComment: string;
+        let futureComment: string | null = null;
         if (proposalJobWalk) {
           futureComment = withMentions(
             mentionUsers,
@@ -841,22 +852,25 @@ export function proposeHighlights(
             mentionUsers,
             'Kindly check this is future billable or not?',
           );
-        } else {
+        } else if (!projectAlreadyFutureBillable) {
           futureComment = withMentions(
             mentionUsers,
             'Move to future billable category? Take action as needed.',
           );
         }
-        pushUnique(proposals, seen, {
-          employeeName,
-          ruleId: 'future_billable',
-          ruleLabel: RULE_LABELS.future_billable,
-          matchedText: desc,
-          triggerText: futureSentence,
-          projectLabel: currentProjectLabel,
-          tag: currentTag,
-          comment: futureComment,
-        });
+
+        if (futureComment) {
+          pushUnique(proposals, seen, {
+            employeeName,
+            ruleId: 'future_billable',
+            ruleLabel: RULE_LABELS.future_billable,
+            matchedText: desc,
+            triggerText: futureSentence,
+            projectLabel: currentProjectLabel,
+            tag: currentTag,
+            comment: futureComment,
+          });
+        }
       }
 
       // Project names like "ACC26xxx" are real standing projects, so only the
@@ -906,11 +920,13 @@ export function proposeHighlights(
       ];
       const billableSentence = sentenceContaining(desc, billablePatterns);
       // Proposal Time job walks are covered by future_billable, not "Billable?".
+      // Internal note already saying nonbillable settles billable-work questions.
       if (
         isNonBillableStarProject(currentProjectLabel) &&
         billableSentence &&
         !internalAdminWork &&
-        !proposalJobWalk
+        !proposalJobWalk &&
+        !internalNoteSaysNonBillable(desc)
       ) {
         pushUnique(proposals, seen, {
           employeeName,
