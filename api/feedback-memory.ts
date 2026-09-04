@@ -1,8 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Redis } from '@upstash/redis';
 
-const redis = Redis.fromEnv();
-
 const INDEX_KEY = 'feedback-memory:index:fingerprints';
 const ENTRY_PREFIX = 'feedback-memory:entry:';
 
@@ -17,6 +15,17 @@ export type FeedbackMemoryEntry = {
   note?: string;
   createdAt: string;
 };
+
+function getRedis(): Redis | null {
+  const url =
+    process.env.UPSTASH_REDIS_REST_URL?.trim() ||
+    process.env.KV_REST_API_URL?.trim();
+  const token =
+    process.env.UPSTASH_REDIS_REST_TOKEN?.trim() ||
+    process.env.KV_REST_API_TOKEN?.trim();
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+}
 
 function readOptionalApiKey(): string | null {
   // Optional extra protection if you want to require a shared secret header.
@@ -51,6 +60,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (!assertApiKey(req)) {
     res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const redis = getRedis();
+  if (!redis) {
+    res.status(503).json({
+      error:
+        'Feedback memory is not configured. Add UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (or connect Vercel Upstash Redis / KV) in project env, then redeploy.',
+    });
     return;
   }
 

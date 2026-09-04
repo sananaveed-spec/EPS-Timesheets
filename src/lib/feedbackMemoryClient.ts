@@ -54,7 +54,13 @@ export async function fetchRejectMemoryEntries(): Promise<
     method: 'GET',
   });
   if (!response.ok) {
-    throw new Error(`Feedback memory entries fetch failed (${response.status}).`);
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+    throw new Error(
+      payload?.error ||
+        `Feedback memory entries fetch failed (${response.status}).`,
+    );
   }
 
   const payload = (await response.json()) as {
