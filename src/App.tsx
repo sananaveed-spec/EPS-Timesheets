@@ -4,6 +4,7 @@ import { getAccountEmail, isAllowedOrganizationEmail } from './auth/organization
 import { logoutCompletely } from './auth/session';
 import { ReportSetup } from './components/ReportSetup';
 import { HighlightReview } from './components/HighlightReview';
+import { FeedbackMemoryPanel } from './components/FeedbackMemoryPanel';
 import { LoginPage } from './components/LoginPage';
 import { UserManager } from './components/UserManager';
 import { fetchClockifyDetailedRange } from './lib/clockifyApi';
@@ -24,6 +25,8 @@ import {
   saveManagedUsers,
   saveMentionUsers,
 } from './lib/userSettings';
+import { fetchRejectFingerprints } from './lib/feedbackMemoryClient';
+import { makeRejectFingerprintParts } from './lib/feedbackMemoryFingerprint';
 import type {
   EmployeeCategory,
   ManagedUser,
@@ -47,12 +50,30 @@ function AppContent() {
   const [highlightProposals, setHighlightProposals] = useState<
     HighlightProposal[]
   >([]);
+  const [proposalsLoading, setProposalsLoading] = useState(false);
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>(
     () => loadManagedUsers(),
   );
   const [mentionUsers, setMentionUsers] = useState<MentionUser[]>(
     () => loadMentionUsers(),
   );
+  const [rejectFingerprints, setRejectFingerprints] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [rejectMemoryLoaded, setRejectMemoryLoaded] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const fingerprints = await fetchRejectFingerprints();
+        setRejectFingerprints(fingerprints);
+      } catch {
+        // If feedback memory is unavailable, we still allow review.
+      } finally {
+        setRejectMemoryLoaded(true);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     setManagedUsers(loadManagedUsers());
@@ -71,6 +92,7 @@ function AppContent() {
       setSourceLabel(null);
       setPivot(null);
       setHighlightProposals([]);
+      setProposalsLoading(false);
       setError(null);
       setLoading(true);
 
@@ -84,9 +106,37 @@ function AppContent() {
             });
             setPivot(nextPivot);
             setSourceLabel(result.label);
-            setHighlightProposals(
-              proposeHighlights(nextPivot, managedUsers, mentionUsers),
-            );
+
+            void (async () => {
+              setProposalsLoading(true);
+              let fingerprints = rejectFingerprints;
+              if (!rejectMemoryLoaded) {
+                try {
+                  fingerprints = await fetchRejectFingerprints();
+                  setRejectFingerprints(fingerprints);
+                } catch {
+                  // Fallback: no suppression
+                  fingerprints = new Set();
+                } finally {
+                  setRejectMemoryLoaded(true);
+                }
+              }
+
+              const proposals = proposeHighlights(
+                nextPivot,
+                managedUsers,
+                mentionUsers,
+              );
+              const filtered = proposals.filter((p) => {
+                if (p.status !== 'pending') return true;
+                const fingerprintId =
+                  makeRejectFingerprintParts(p).fingerprintId;
+                return !fingerprints.has(fingerprintId);
+              });
+
+              setHighlightProposals(filtered);
+              setProposalsLoading(false);
+            })();
           } else {
             setError(result.error);
             setSourceLabel(null);
@@ -94,7 +144,7 @@ function AppContent() {
         },
       );
     },
-    [managedUsers, mentionUsers],
+    [managedUsers, mentionUsers, rejectFingerprints, rejectMemoryLoaded],
   );
 
   const handleDownloadZip = useCallback(async () => {
@@ -206,7 +256,8 @@ function AppContent() {
       const next = proposeHighlights(pivot, managedUsers, mentionUsers);
       // Preserve Accept/Edit/Delete decisions where ids still match
       const prevById = new Map(current.map((p) => [p.id, p]));
-      return next.map((p) => {
+
+      const merged = next.map((p) => {
         const prev = prevById.get(p.id);
         if (!prev) return p;
         return {
@@ -215,8 +266,23 @@ function AppContent() {
           comment: prev.status === 'accepted' ? prev.comment : p.comment,
         };
       });
+
+      return merged.filter((p) => {
+        if (p.status !== 'pending') return true;
+        const fingerprintId = makeRejectFingerprintParts(p).fingerprintId;
+        return !rejectFingerprints.has(fingerprintId);
+      });
     });
-  }, [managedUsers, mentionUsers, pivot]);
+  }, [managedUsers, mentionUsers, pivot, rejectFingerprints]);
+
+  const handleRejectSaved = useCallback((fingerprintId: string) => {
+    setRejectFingerprints((current) => {
+      const next = new Set(current);
+      next.add(fingerprintId);
+      return next;
+    });
+    setRejectMemoryLoaded(true);
+  }, []);
 
   if (!isAuthenticated || !isAllowed) {
     return <LoginPage />;
@@ -294,15 +360,22 @@ function AppContent() {
                   </label>
                 </div>
 
-                <HighlightReview
-                  key={sourceLabel ?? 'review'}
-                  proposals={highlightProposals}
-                  onChange={setHighlightProposals}
-                  onDownload={() => {
-                    void handleDownloadZip();
-                  }}
-                  downloading={downloading}
-                />
+                {proposalsLoading ? (
+                  <p className="mb-4 text-sm text-blue-600">
+                    Applying saved reject memory…
+                  </p>
+                ) : (
+                  <HighlightReview
+                    key={sourceLabel ?? 'review'}
+                    proposals={highlightProposals}
+                    onChange={setHighlightProposals}
+                    onDownload={() => {
+                      void handleDownloadZip();
+                    }}
+                    downloading={downloading}
+                    onRejectSaved={handleRejectSaved}
+                  />
+                )}
               </>
             ) : (
               <div className="rounded-lg border border-dashed border-gray-300 px-4 py-8 text-sm text-gray-500">
@@ -321,6 +394,13 @@ function AppContent() {
             onRemoveUsers={handleRemoveUsers}
             onAddMentions={handleAddMentions}
             onRemoveMentions={handleRemoveMentions}
+          />
+
+          <FeedbackMemoryPanel
+            onCleared={() => {
+              setRejectFingerprints(new Set());
+              setRejectMemoryLoaded(true);
+            }}
           />
         </div>
       </div>

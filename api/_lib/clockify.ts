@@ -108,6 +108,8 @@ export function dateRangeToISO(
   endDate: string,
   _timezone: string,
 ): { startISO: string; endISO: string } {
+  // Parameter kept for call-site compatibility.
+  void _timezone;
   return {
     startISO: `${startDate}T00:00:00.000Z`,
     endISO: `${endDate}T23:59:59.999Z`,

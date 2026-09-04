@@ -1,6 +1,17 @@
 import { useMemo, useState } from 'react';
 import type { HighlightProposal } from '../lib/highlightRules';
 import { groupProposalsByEmployee } from '../lib/highlightRules';
+import { makeRejectFingerprintParts } from '../lib/feedbackMemoryFingerprint';
+import { saveRejectMemoryEntry } from '../lib/feedbackMemoryClient';
+
+const REJECT_REASON_OPTIONS = [
+  { id: 'false_positive', label: 'False positive / not needed' },
+  { id: 'already_handled', label: 'Already handled elsewhere' },
+  { id: 'wrong_match', label: 'Matched text is wrong' },
+  { id: 'other', label: 'Other' },
+] as const;
+
+type RejectReasonId = (typeof REJECT_REASON_OPTIONS)[number]['id'];
 
 interface HighlightReviewProps {
   proposals: HighlightProposal[];
@@ -8,6 +19,7 @@ interface HighlightReviewProps {
   onDownload: () => void;
   downloadDisabled?: boolean;
   downloading?: boolean;
+  onRejectSaved?: (fingerprintId: string) => void;
 }
 
 function statusCounts(items: HighlightProposal[]) {
@@ -24,12 +36,23 @@ export function HighlightReview({
   onDownload,
   downloadDisabled = false,
   downloading = false,
+  onRejectSaved,
 }: HighlightReviewProps) {
   const groups = useMemo(() => groupProposalsByEmployee(proposals), [proposals]);
   const [fileIndex, setFileIndex] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTrigger, setDraftTrigger] = useState('');
   const [draftComment, setDraftComment] = useState('');
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState<RejectReasonId>('false_positive');
+  const [rejectNote, setRejectNote] = useState('');
+  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
+  const [bulkRejectReason, setBulkRejectReason] = useState<RejectReasonId>(
+    'false_positive',
+  );
+  const [bulkRejectNote, setBulkRejectNote] = useState('');
+  const [rejectSaving, setRejectSaving] = useState(false);
+  const [rejectSaveError, setRejectSaveError] = useState<string | null>(null);
 
   const safeIndex =
     groups.length === 0 ? 0 : Math.min(fileIndex, groups.length - 1);
@@ -61,14 +84,70 @@ export function HighlightReview({
     );
   };
 
-  const deleteAllOnFile = () => {
-    if (!current) return;
-    const ids = new Set(current.proposals.map((p) => p.id));
+  const updateRejectStatus = (ids: Set<string>) => {
     onChange(
-      proposals.map((p) =>
-        ids.has(p.id) ? { ...p, status: 'deleted' } : p,
-      ),
+      proposals.map((p) => (ids.has(p.id) ? { ...p, status: 'deleted' } : p)),
     );
+  };
+
+  const saveRejectForProposal = async (
+    proposal: HighlightProposal,
+    reason: RejectReasonId,
+    note: string,
+  ) => {
+    const fingerprintParts = makeRejectFingerprintParts(proposal);
+    try {
+      await saveRejectMemoryEntry({
+        fingerprintParts,
+        reason,
+        note,
+      });
+    } catch (e) {
+      // Failing to persist memory shouldn't block review; we still delete the item.
+      setRejectSaveError(
+        e instanceof Error ? e.message : 'Failed to save reject memory.',
+      );
+    } finally {
+      onRejectSaved?.(fingerprintParts.fingerprintId);
+    }
+  };
+
+  const saveBulkRejects = async () => {
+    if (!current) return;
+    setRejectSaving(true);
+    setRejectSaveError(null);
+    try {
+      const ids = new Set(current.proposals.map((p) => p.id));
+      const payloads = current.proposals
+        .filter((p) => ids.has(p.id))
+        .map((proposal) => ({
+        fingerprintParts: makeRejectFingerprintParts(proposal),
+      }));
+
+      updateRejectStatus(ids);
+      await Promise.all(
+        payloads.map(async ({ fingerprintParts }) => {
+          try {
+            await saveRejectMemoryEntry({
+              fingerprintParts,
+              reason: bulkRejectReason,
+              note: bulkRejectNote,
+            });
+          } catch (e) {
+            setRejectSaveError(
+              e instanceof Error ? e.message : 'Failed to save reject memory.',
+            );
+          } finally {
+            onRejectSaved?.(fingerprintParts.fingerprintId);
+          }
+        }),
+      );
+    } finally {
+      setRejectSaving(false);
+      setBulkRejectOpen(false);
+      setBulkRejectReason('false_positive');
+      setBulkRejectNote('');
+    }
   };
 
   if (groups.length === 0) {
@@ -118,6 +197,12 @@ export function HighlightReview({
         </div>
       </div>
 
+      {rejectSaveError && (
+        <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          {rejectSaveError}
+        </div>
+      )}
+
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 ring-1 ring-gray-200">
         <div className="text-sm text-gray-800">
           <span className="font-semibold">
@@ -141,7 +226,13 @@ export function HighlightReview({
           </button>
           <button
             type="button"
-            onClick={deleteAllOnFile}
+            onClick={() => {
+              setBulkRejectOpen(true);
+              setBulkRejectReason('false_positive');
+              setBulkRejectNote('');
+              setRejectSaveError(null);
+            }}
+            disabled={rejectSaving}
             className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
           >
             Delete all on this file
@@ -149,9 +240,67 @@ export function HighlightReview({
         </div>
       </div>
 
+      {bulkRejectOpen && current && (
+        <div className="mt-3 rounded-lg border border-gray-200 bg-white p-3">
+          <div className="text-sm font-medium text-gray-900">
+            Delete all proposals on {current.employeeName}.pdf?
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr]">
+            <label className="block text-xs font-medium text-gray-700 md:col-span-1">
+              Reject reason
+              <select
+                value={bulkRejectReason}
+                onChange={(e) =>
+                  setBulkRejectReason(e.target.value as RejectReasonId)
+                }
+                className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900"
+              >
+                {REJECT_REASON_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs font-medium text-gray-700 md:col-span-1">
+              Optional note
+              <textarea
+                value={bulkRejectNote}
+                onChange={(event) => setBulkRejectNote(event.target.value)}
+                rows={3}
+                className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-blue-500"
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={rejectSaving}
+              onClick={() => void saveBulkRejects()}
+              className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {rejectSaving ? 'Saving…' : 'Confirm delete (and save reject memory)'}
+            </button>
+            <button
+              type="button"
+              disabled={rejectSaving}
+              onClick={() => {
+                setBulkRejectOpen(false);
+                setBulkRejectReason('false_positive');
+                setBulkRejectNote('');
+              }}
+              className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <ul className="mt-3 space-y-3">
         {current.proposals.map((item) => {
           const isEditing = editingId === item.id;
+          const isRejecting = rejectingId === item.id;
           return (
             <li
               key={item.id}
@@ -253,6 +402,77 @@ export function HighlightReview({
 
               {!isEditing && (
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {isRejecting ? (
+                    <>
+                      <label className="block w-full text-xs font-medium text-gray-700">
+                        Reject reason
+                        <select
+                          value={rejectReason}
+                          onChange={(e) =>
+                            setRejectReason(e.target.value as RejectReasonId)
+                          }
+                          className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900"
+                        >
+                          {REJECT_REASON_OPTIONS.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block w-full text-xs font-medium text-gray-700">
+                        Optional note
+                        <textarea
+                          value={rejectNote}
+                          onChange={(event) => setRejectNote(event.target.value)}
+                          rows={3}
+                          className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-blue-500"
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={rejectSaving}
+                          onClick={() => {
+                            const reasonToSave = rejectReason;
+                            const noteToSave = rejectNote;
+                            updateProposal(item.id, { status: 'deleted' });
+                            setRejectingId(null);
+                            setRejectNote('');
+                            setRejectReason('false_positive');
+                            setRejectSaving(true);
+                            void (async () => {
+                              try {
+                                await saveRejectForProposal(
+                                  item,
+                                  reasonToSave,
+                                  noteToSave,
+                                );
+                              } finally {
+                                setRejectSaving(false);
+                              }
+                            })();
+                          }}
+                          className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {rejectSaving ? 'Saving…' : 'Confirm delete'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rejectSaving}
+                          onClick={() => {
+                            setRejectingId(null);
+                            setRejectNote('');
+                            setRejectReason('false_positive');
+                          }}
+                          className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
                   <button
                     type="button"
                     onClick={() =>
@@ -276,12 +496,19 @@ export function HighlightReview({
                   <button
                     type="button"
                     onClick={() =>
-                      updateProposal(item.id, { status: 'deleted' })
+                      (() => {
+                        setRejectingId(item.id);
+                        setRejectReason('false_positive');
+                        setRejectNote('');
+                        setRejectSaveError(null);
+                      })()
                     }
                     className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                   >
                     Delete
                   </button>
+                    </>
+                  )}
                 </div>
               )}
             </li>
