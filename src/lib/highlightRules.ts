@@ -292,7 +292,7 @@ function isShopOrOfficeErrand(description: string): boolean {
 function isPlanningTravel(description: string): boolean {
   const d = description.toLowerCase();
   return (
-    /\bscheduled?\s+(?:a\s+)?(?:job\s+walk|site\s+(?:visit|walk|survey)|on[- ]?site)\b/i.test(
+    /\bschedul(?:e|ed|ing)\s+(?:a\s+)?(?:job(?:\s+walk)?|site\s+(?:visit|walk|survey)|on[- ]?site)\b/i.test(
       d,
     ) ||
     /\b(?:will|going\s+to)\s+(?:schedule|go|visit|travel|do)\b/i.test(d) ||
@@ -747,6 +747,7 @@ export function proposeHighlights(
       const needsMiles =
         !proposalJobWalk &&
         !internalAdminWork &&
+        !isPlanningTravel(desc) &&
         (isSiteSurveyTag(currentTag) || isTravelOnSite(desc)) &&
         !hasMiles(desc) &&
         !hasZeroMiles(desc);
