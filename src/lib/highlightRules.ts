@@ -237,6 +237,67 @@ function hasZeroMiles(description: string): boolean {
   return /\b0\s*miles?\b/i.test(description);
 }
 
+function collectEmployeeFirstNames(
+  managedUsers: ManagedUser[],
+  employeeNames: string[],
+): Set<string> {
+  const names = new Set<string>();
+  for (const user of managedUsers) {
+    const fn = firstName(user.name).toLowerCase();
+    if (fn) names.add(fn);
+  }
+  for (const name of employeeNames) {
+    const fn = firstName(name).toLowerCase();
+    if (fn) names.add(fn);
+  }
+  return names;
+}
+
+/** True when a written name matches a known employee first name (exact or short form). */
+function matchesEmployeeFirstName(
+  writtenName: string,
+  employeeFirstNames: Set<string>,
+): boolean {
+  const written = writtenName.toLowerCase();
+  if (!written) return false;
+  if (employeeFirstNames.has(written)) return true;
+  // Short forms: "Zulfi" matches "Zulfiqar" (min 4 chars to avoid weak matches)
+  if (written.length < 4) return false;
+  for (const first of employeeFirstNames) {
+    if (first.startsWith(written) || (first.length >= 4 && written.startsWith(first))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True when description already names who drove using "I" or a known employee first name. */
+function hasNamedDriver(
+  description: string,
+  employeeFirstNames: Set<string>,
+): boolean {
+  if (/\bI\s+drove\b/.test(description)) return true;
+
+  for (const match of description.matchAll(
+    /\b([A-Za-z][A-Za-z.'-]*)\s+drove\b/gi,
+  )) {
+    if (matchesEmployeeFirstName(match[1]!, employeeFirstNames)) return true;
+  }
+
+  for (const match of description.matchAll(
+    /\b([A-Za-z][A-Za-z.'-]*)\s+and\s+([A-Za-z][A-Za-z.'-]*)\s+drove\b/gi,
+  )) {
+    if (
+      matchesEmployeeFirstName(match[1]!, employeeFirstNames) ||
+      matchesEmployeeFirstName(match[2]!, employeeFirstNames)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function hasMultipleHourValues(description: string): boolean {
   // Matches: "1 hour", "2 hours", "2.5 hrs", "3 hr", case-insensitive.
   // Also tolerates trailing punctuation: "2 hr.", "2 hrs,", etc.
@@ -315,6 +376,11 @@ function isPlanningTravel(description: string): boolean {
     ).test(d) ||
     new RegExp(
       String.raw`\b(?:plan|planned|planning)\s+(?:for\s+)?${aThe}${visitTarget}\b`,
+      'i',
+    ).test(d) ||
+    // Reverse order: "site visit planned", "job walk scheduled", etc.
+    new RegExp(
+      String.raw`\b${aThe}${visitTarget}\s+(?:is\s+|was\s+|has\s+been\s+)?(?:planned|planning|scheduled|scheduling|prepared|preparing)\b`,
       'i',
     ).test(d) ||
     /\bplan(?:ning)?\s+to\s+(?:go|visit|travel|schedule|do)\b/i.test(d) ||
@@ -742,6 +808,10 @@ export function proposeHighlights(
   const seen = new Set<string>();
   const sections = splitRowsByUser(pivot.rows);
   const holidayDates = federalHolidaySetForDates(pivot.dates);
+  const employeeFirstNames = collectEmployeeFirstNames(
+    managedUsers,
+    sections.map((section) => section.name),
+  );
 
   for (const { name: employeeName, rows: sectionRows } of sections) {
     const employeeFirst = firstName(employeeName);
@@ -783,6 +853,7 @@ export function proposeHighlights(
         !proposalJobWalk &&
         !internalAdminWork &&
         !isPlanningTravel(desc) &&
+        !hasNamedDriver(desc, employeeFirstNames) &&
         (isSiteSurveyTag(currentTag) || isTravelOnSite(desc)) &&
         !hasMiles(desc) &&
         !hasZeroMiles(desc);
