@@ -462,6 +462,13 @@ function internalNoteSaysNonBillable(description: string): boolean {
   return /non[-\s]?billable/i.test(description.slice(idx));
 }
 
+/** True when the Internal note section already says future billable. */
+function internalNoteSaysFutureBillable(description: string): boolean {
+  const idx = description.search(/\binternal\s+note\b/i);
+  if (idx < 0) return false;
+  return /future\s+billable/i.test(description.slice(idx));
+}
+
 function splitRowsByUser(rows: PivotRow[]): { name: string; rows: PivotRow[] }[] {
   const sections: { name: string; rows: PivotRow[] }[] = [];
   let current: PivotRow[] = [];
@@ -1017,7 +1024,14 @@ export function proposeHighlights(
       const internalNoteSentence = sentenceContaining(desc, [
         /\binternal\s+note\b/i,
       ]);
-      if (internalNoteSentence) {
+      // Already on Future Billable with a confirming internal note — no "please note".
+      if (
+        internalNoteSentence &&
+        !(
+          isFutureBillableProject(currentProjectLabel) &&
+          internalNoteSaysFutureBillable(desc)
+        )
+      ) {
         pushUnique(proposals, seen, {
           employeeName,
           ruleId: 'internal_note',
