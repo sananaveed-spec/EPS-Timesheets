@@ -240,10 +240,18 @@ function hasZeroMiles(description: string): boolean {
 function hasMultipleHourValues(description: string): boolean {
   // Matches: "1 hour", "2 hours", "2.5 hrs", "3 hr", case-insensitive.
   // Also tolerates trailing punctuation: "2 hr.", "2 hrs,", etc.
+  // Break time (e.g. "1 hour break", "1 hr break time") is ignored — it is
+  // not a second work block that needs splitting.
   const hourRegex =
     /\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|hr)\.?(?=\b|$|[^A-Za-z0-9])/gi;
-  const matches = description.match(hourRegex);
-  return (matches?.length ?? 0) >= 2;
+  let workHourCount = 0;
+  for (const match of description.matchAll(hourRegex)) {
+    const end = (match.index ?? 0) + match[0].length;
+    const after = description.slice(end, end + 24);
+    if (/^\s*(?:time\s+)?break(?:\s+time)?\b/i.test(after)) continue;
+    workHourCount += 1;
+  }
+  return workHourCount >= 2;
 }
 
 /** Personal / non-job trips — miles not required (e.g. restaurant, lunch). */
@@ -291,19 +299,46 @@ function isShopOrOfficeErrand(description: string): boolean {
 /** Scheduling / planning a future visit — not travel that already happened. */
 function isPlanningTravel(description: string): boolean {
   const d = description.toLowerCase();
+  // Shared target: job walk / site visit|walk|survey / on-site
+  const visitTarget =
+    '(?:job(?:\\s+walk)?|site\\s+(?:visit|walk|survey)|on[- ]?site)';
+  const aThe = '(?:(?:a|the)\\s+)?';
+
   return (
-    /\bschedul(?:e|ed|ing)\s+(?:a\s+)?(?:job(?:\s+walk)?|site\s+(?:visit|walk|survey)|on[- ]?site)\b/i.test(
+    new RegExp(
+      String.raw`\bschedul(?:e|ed|ing)\s+${aThe}${visitTarget}\b`,
+      'i',
+    ).test(d) ||
+    new RegExp(
+      String.raw`\bprepar(?:e|ed|ing)\s+(?:everything\s+)?(?:for\s+)?${aThe}${visitTarget}\b`,
+      'i',
+    ).test(d) ||
+    new RegExp(
+      String.raw`\b(?:plan|planned|planning)\s+(?:for\s+)?${aThe}${visitTarget}\b`,
+      'i',
+    ).test(d) ||
+    /\bplan(?:ning)?\s+to\s+(?:go|visit|travel|schedule|do)\b/i.test(d) ||
+    /\b(?:will|going\s+to)\s+(?:schedule|go|visit|travel|do|prepare|plan)\b/i.test(
       d,
     ) ||
-    /\b(?:will|going\s+to)\s+(?:schedule|go|visit|travel|do)\b/i.test(d) ||
-    /\bplan(?:ning)?\s+to\s+(?:go|visit|travel|schedule)\b/i.test(d) ||
     /\bschedule\s+time\s+to\s+go\b/i.test(d) ||
-    /\bsetting\s+up\s+(?:a\s+)?site\s+visit\b/i.test(d) ||
+    new RegExp(
+      String.raw`\bsetting\s+up\s+${aThe}${visitTarget}\b`,
+      'i',
+    ).test(d) ||
+    new RegExp(
+      String.raw`\bsetting\s+everything\s+for\s+${aThe}${visitTarget}\b`,
+      'i',
+    ).test(d) ||
     /\bfor\s+potential\s+site\s+visit\b/i.test(d) ||
-    /\b(?:lined\s+up|line\s+up|lining\s+up)\b.*\bjob\s+walk\b/i.test(d) ||
-    /\bcoordinat(?:ed|e|ing)\s+.*\b(?:job\s+walk|site\s+visit|on[- ]?site)\b/i.test(
-      d,
-    )
+    new RegExp(
+      String.raw`\b(?:lined\s+up|line\s+up|lining\s+up)\b.*\b${visitTarget}\b`,
+      'i',
+    ).test(d) ||
+    new RegExp(
+      String.raw`\bcoordinat(?:ed|e|ing)\s+.*\b${visitTarget}\b`,
+      'i',
+    ).test(d)
   );
 }
 
