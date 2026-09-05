@@ -25,7 +25,8 @@ export type HighlightRuleId =
   | 'wrong_coding'
   | 'holiday_comp'
   | 'category_sick'
-  | 'internal_note';
+  | 'internal_note'
+  | 'admin_office_time';
 
 export interface HighlightProposal {
   id: string;
@@ -513,6 +514,12 @@ function isEpsAdminOfficeOrProposalTime(projectLabel: string): boolean {
   );
 }
 
+/** Projects whose name includes both Admin and Office (e.g. *EPS Admin: Office Time). */
+function isAdminOfficeProject(projectLabel: string): boolean {
+  const p = projectLabel.toUpperCase();
+  return /\bADMIN\b/.test(p) && /\bOFFICE\b/.test(p);
+}
+
 function isProposalTime(projectLabel: string): boolean {
   return /PROPOSAL\s+TIME/i.test(projectLabel);
 }
@@ -637,6 +644,7 @@ function mergeProposalsByRow(
     'missing_miles',
     'odd_miles',
     'miles_in_eps_admin_office_time',
+    'admin_office_time',
     'holiday_comp',
     'category_sick',
     'internal_note',
@@ -788,6 +796,7 @@ const RULE_LABELS: Record<HighlightRuleId, string> = {
   missing_miles: 'Missing miles',
   odd_miles: 'Odd miles (0 miles)',
   miles_in_eps_admin_office_time: 'Miles in EPS Admin office time',
+  admin_office_time: 'Admin/Office time',
   multiple_hour_values_split_entry: 'Multiple hour values in one entry',
   billable_keyword: 'Possible billable work',
   open_job_keyword: 'Open job / job number needed',
@@ -1148,6 +1157,23 @@ export function proposeHighlights(
           projectLabel: currentProjectLabel,
           tag: currentTag,
           comment: withMentions(mentionUsers, 'please note this point'),
+        });
+      }
+
+      // Flag every entry coded to an Admin/Office project for review.
+      if (isAdminOfficeProject(currentProjectLabel)) {
+        pushUnique(proposals, seen, {
+          employeeName,
+          ruleId: 'admin_office_time',
+          ruleLabel: RULE_LABELS.admin_office_time,
+          matchedText: desc,
+          triggerText: desc.trim(),
+          projectLabel: currentProjectLabel,
+          tag: currentTag,
+          comment: withMentions(
+            mentionUsers,
+            'Review this Admin/Office Time entry.',
+          ),
         });
       }
     }
