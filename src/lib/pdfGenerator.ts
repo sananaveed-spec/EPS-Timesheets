@@ -14,6 +14,7 @@ import {
   DEFAULT_PART_TIME_HOURLY,
   normalizeEmployeeName,
 } from './employeeCategories';
+import { getDatesInRange } from './transformer';
 
 //const MARGIN = 10;
 //const COLUMN_WIDTH_ROW_LABELS = 94;
@@ -359,11 +360,28 @@ function isWeekday(dateStr: string): boolean {
   return dayOfWeek >= 1 && dayOfWeek <= 5;
 }
 
+/** Mon–Fri dates in the selected period (includes days with 0 hours). */
+function weekdaysInPeriod(
+  periodStart: string | undefined,
+  periodEnd: string | undefined,
+  fallbackDates: string[],
+): string[] {
+  if (periodStart && periodEnd) {
+    const range = getDatesInRange(periodStart, periodEnd);
+    if (range && range.length > 0) {
+      return range.filter(isWeekday);
+    }
+  }
+  return fallbackDates.filter(isWeekday);
+}
+
 function computeReportCard(
   sectionRows: PivotRow[],
   dates: string[],
   employeeName: string,
-  categorySets: ReturnType<typeof buildCategorySets>
+  categorySets: ReturnType<typeof buildCategorySets>,
+  periodStart?: string,
+  periodEnd?: string,
 ): ReportCard {
   let totalHours = 0;
   let sickHours = 0;
@@ -391,9 +409,11 @@ function computeReportCard(
         reportedHoursByDate[d] = row.dateValues[d] ?? 0;
       }
       if (isFullTimeEmployee(employeeName, categorySets)) {
-        for (const d of dates) {
-          if (!isWeekday(d)) continue;
-          const total = roundHoursForReport(row.dateValues[d] ?? 0);
+        // Use full selected period weekdays so zero-hour Mon–Fri days
+        // (missing from detail columns) still show as outstanding.
+        const checkDates = weekdaysInPeriod(periodStart, periodEnd, dates);
+        for (const d of checkDates) {
+          const total = roundHoursForReport(reportedHoursByDate[d] ?? 0);
           if (total < 8) {
             timesheetNeedsFilled.push({
               date: d,
@@ -1064,7 +1084,14 @@ export async function generatePdfsZip(
 
   for (const { name, rows: sectionRows } of userSections) {
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    const reportCard = computeReportCard(sectionRows, dates, name, categorySets);
+    const reportCard = computeReportCard(
+      sectionRows,
+      dates,
+      name,
+      categorySets,
+      pivot.periodStart,
+      pivot.periodEnd,
+    );
     const reportTitle = buildReportTitle(pivot, revNumber);
     drawReportCardPage(
       doc,

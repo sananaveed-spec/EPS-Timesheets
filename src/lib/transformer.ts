@@ -78,7 +78,7 @@ function parseFlexibleDate(dateStr: string): Date | null {
   return parseDate(trimmed);
 }
 
-function getDatesInRange(startDate: string, endDate: string): string[] | null {
+export function getDatesInRange(startDate: string, endDate: string): string[] | null {
   const start = parseFlexibleDate(startDate);
   const end = parseFlexibleDate(endDate);
   if (!start || !end || start.getTime() > end.getTime()) return null;
