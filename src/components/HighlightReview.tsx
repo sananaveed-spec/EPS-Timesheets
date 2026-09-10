@@ -3,6 +3,10 @@ import type { HighlightProposal } from '../lib/highlightRules';
 import { groupProposalsByEmployee } from '../lib/highlightRules';
 import { makeRejectFingerprintParts } from '../lib/feedbackMemoryFingerprint';
 import { saveRejectMemoryEntry } from '../lib/feedbackMemoryClient';
+import {
+  clearReviewHistoryEntry,
+  saveReviewHistoryEntry,
+} from '../lib/reviewHistoryClient';
 
 const REJECT_REASON_OPTIONS = [
   { id: 'false_positive', label: 'False positive / not needed' },
@@ -19,7 +23,8 @@ interface HighlightReviewProps {
   onDownload: () => void;
   downloadDisabled?: boolean;
   downloading?: boolean;
-  onRejectSaved?: (fingerprintId: string) => void;
+  periodStart?: string;
+  periodEnd?: string;
 }
 
 function statusCounts(items: HighlightProposal[]) {
@@ -36,7 +41,8 @@ export function HighlightReview({
   onDownload,
   downloadDisabled = false,
   downloading = false,
-  onRejectSaved,
+  periodStart = '',
+  periodEnd = '',
 }: HighlightReviewProps) {
   const groups = useMemo(() => groupProposalsByEmployee(proposals), [proposals]);
   const [fileIndex, setFileIndex] = useState(0);
@@ -63,6 +69,19 @@ export function HighlightReview({
     proposals.length === 0 ||
     proposals.every((p) => p.status === 'accepted' || p.status === 'deleted');
 
+  const persistDecision = async (
+    proposal: HighlightProposal,
+    status: 'accepted' | 'deleted',
+  ) => {
+    if (!periodStart || !periodEnd) return;
+    await saveReviewHistoryEntry({
+      proposal: { ...proposal, status },
+      periodStart,
+      periodEnd,
+      status,
+    });
+  };
+
   const updateProposal = (
     id: string,
     patch: Partial<
@@ -72,15 +91,46 @@ export function HighlightReview({
     onChange(proposals.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   };
 
+  const acceptProposal = async (proposal: HighlightProposal) => {
+    updateProposal(proposal.id, { status: 'accepted' });
+    try {
+      await persistDecision(proposal, 'accepted');
+    } catch (e) {
+      setRejectSaveError(
+        e instanceof Error ? e.message : 'Failed to save accept history.',
+      );
+    }
+  };
+
+  const restoreProposal = async (proposal: HighlightProposal) => {
+    updateProposal(proposal.id, { status: 'pending' });
+    if (!periodStart || !periodEnd) return;
+    try {
+      await clearReviewHistoryEntry({
+        proposal,
+        periodStart,
+        periodEnd,
+      });
+    } catch (e) {
+      setRejectSaveError(
+        e instanceof Error ? e.message : 'Failed to restore highlight.',
+      );
+    }
+  };
+
   const acceptAllOnFile = () => {
     if (!current) return;
     const ids = new Set(current.proposals.map((p) => p.id));
+    const toAccept = current.proposals.filter((p) => p.status === 'pending');
     onChange(
       proposals.map((p) =>
         ids.has(p.id) && p.status === 'pending'
           ? { ...p, status: 'accepted' }
           : p,
       ),
+    );
+    void Promise.all(
+      toAccept.map((p) => persistDecision(p, 'accepted').catch(() => undefined)),
     );
   };
 
@@ -97,18 +147,16 @@ export function HighlightReview({
   ) => {
     const fingerprintParts = makeRejectFingerprintParts(proposal);
     try {
+      await persistDecision(proposal, 'deleted');
       await saveRejectMemoryEntry({
         fingerprintParts,
         reason,
         note,
       });
     } catch (e) {
-      // Failing to persist memory shouldn't block review; we still delete the item.
       setRejectSaveError(
         e instanceof Error ? e.message : 'Failed to save reject memory.',
       );
-    } finally {
-      onRejectSaved?.(fingerprintParts.fingerprintId);
     }
   };
 
@@ -118,16 +166,16 @@ export function HighlightReview({
     setRejectSaveError(null);
     try {
       const ids = new Set(current.proposals.map((p) => p.id));
-      const payloads = current.proposals
-        .filter((p) => ids.has(p.id))
-        .map((proposal) => ({
+      const payloads = current.proposals.map((proposal) => ({
+        proposal,
         fingerprintParts: makeRejectFingerprintParts(proposal),
       }));
 
       updateRejectStatus(ids);
       await Promise.all(
-        payloads.map(async ({ fingerprintParts }) => {
+        payloads.map(async ({ proposal, fingerprintParts }) => {
           try {
+            await persistDecision(proposal, 'deleted');
             await saveRejectMemoryEntry({
               fingerprintParts,
               reason: bulkRejectReason,
@@ -137,8 +185,6 @@ export function HighlightReview({
             setRejectSaveError(
               e instanceof Error ? e.message : 'Failed to save reject memory.',
             );
-          } finally {
-            onRejectSaved?.(fingerprintParts.fingerprintId);
           }
         }),
       );
@@ -375,15 +421,30 @@ export function HighlightReview({
                     <button
                       type="button"
                       onClick={() => {
+                        const nextTrigger =
+                          draftTrigger.trim() ||
+                          item.triggerText ||
+                          item.matchedText;
+                        const nextComment = draftComment.trim() || item.comment;
+                        const updated = {
+                          ...item,
+                          triggerText: nextTrigger,
+                          comment: nextComment,
+                          status: 'accepted' as const,
+                        };
                         updateProposal(item.id, {
-                          triggerText:
-                            draftTrigger.trim() ||
-                            item.triggerText ||
-                            item.matchedText,
-                          comment: draftComment.trim() || item.comment,
+                          triggerText: nextTrigger,
+                          comment: nextComment,
                           status: 'accepted',
                         });
                         setEditingId(null);
+                        void persistDecision(updated, 'accepted').catch((e) => {
+                          setRejectSaveError(
+                            e instanceof Error
+                              ? e.message
+                              : 'Failed to save accept history.',
+                          );
+                        });
                       }}
                       className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
                     >
@@ -471,13 +532,45 @@ export function HighlightReview({
                         </button>
                       </div>
                     </>
+                  ) : item.status === 'deleted' ? (
+                    <button
+                      type="button"
+                      onClick={() => void restoreProposal(item)}
+                      className="rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
+                    >
+                      Restore to pending
+                    </button>
+                  ) : item.status === 'accepted' ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(item.id);
+                          setDraftTrigger(item.triggerText || item.matchedText);
+                          setDraftComment(item.comment);
+                        }}
+                        className="rounded border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 hover:bg-blue-100"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRejectingId(item.id);
+                          setRejectReason('false_positive');
+                          setRejectNote('');
+                          setRejectSaveError(null);
+                        }}
+                        className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Delete
+                      </button>
+                    </>
                   ) : (
                     <>
                   <button
                     type="button"
-                    onClick={() =>
-                      updateProposal(item.id, { status: 'accepted' })
-                    }
+                    onClick={() => void acceptProposal(item)}
                     className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
                   >
                     Accept

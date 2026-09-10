@@ -26,7 +26,11 @@ import {
   saveMentionUsers,
 } from './lib/userSettings';
 import { fetchRejectFingerprints } from './lib/feedbackMemoryClient';
-import { makeRejectFingerprintParts } from './lib/feedbackMemoryFingerprint';
+import { fetchReviewHistory } from './lib/reviewHistoryClient';
+import {
+  applyReviewHistory,
+  type ReviewHistoryEntry,
+} from './lib/reviewHistoryFingerprint';
 import type {
   EmployeeCategory,
   ManagedUser,
@@ -57,23 +61,7 @@ function AppContent() {
   const [mentionUsers, setMentionUsers] = useState<MentionUser[]>(
     () => loadMentionUsers(),
   );
-  const [rejectFingerprints, setRejectFingerprints] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [rejectMemoryLoaded, setRejectMemoryLoaded] = useState(false);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const fingerprints = await fetchRejectFingerprints();
-        setRejectFingerprints(fingerprints);
-      } catch {
-        // If feedback memory is unavailable, we still allow review.
-      } finally {
-        setRejectMemoryLoaded(true);
-      }
-    })();
-  }, []);
+  const [reviewHistory, setReviewHistory] = useState<ReviewHistoryEntry[]>([]);
 
   useEffect(() => {
     setManagedUsers(loadManagedUsers());
@@ -92,6 +80,7 @@ function AppContent() {
       setSourceLabel(null);
       setPivot(null);
       setHighlightProposals([]);
+      setReviewHistory([]);
       setProposalsLoading(false);
       setError(null);
       setLoading(true);
@@ -109,32 +98,26 @@ function AppContent() {
 
             void (async () => {
               setProposalsLoading(true);
-              let fingerprints = rejectFingerprints;
-              if (!rejectMemoryLoaded) {
-                try {
-                  fingerprints = await fetchRejectFingerprints();
-                  setRejectFingerprints(fingerprints);
-                } catch {
-                  // Fallback: no suppression
-                  fingerprints = new Set();
-                } finally {
-                  setRejectMemoryLoaded(true);
-                }
+              const periodStart = nextPivot.periodStart || startDate;
+              const periodEnd = nextPivot.periodEnd || endDate;
+              let history: ReviewHistoryEntry[] = [];
+              try {
+                history = await fetchReviewHistory(periodStart, periodEnd);
+                setReviewHistory(history);
+              } catch {
+                history = [];
+                setReviewHistory([]);
               }
+
+              // Keep Saved rejects panel usable, but do not hide deletes anymore.
+              void fetchRejectFingerprints().catch(() => undefined);
 
               const proposals = proposeHighlights(
                 nextPivot,
                 managedUsers,
                 mentionUsers,
               );
-              const filtered = proposals.filter((p) => {
-                if (p.status !== 'pending') return true;
-                const fingerprintId =
-                  makeRejectFingerprintParts(p).fingerprintId;
-                return !fingerprints.has(fingerprintId);
-              });
-
-              setHighlightProposals(filtered);
+              setHighlightProposals(applyReviewHistory(proposals, history));
               setProposalsLoading(false);
             })();
           } else {
@@ -144,7 +127,7 @@ function AppContent() {
         },
       );
     },
-    [managedUsers, mentionUsers, rejectFingerprints, rejectMemoryLoaded],
+    [managedUsers, mentionUsers],
   );
 
   const handleDownloadZip = useCallback(async () => {
@@ -254,7 +237,6 @@ function AppContent() {
     if (!pivot) return;
     setHighlightProposals((current) => {
       const next = proposeHighlights(pivot, managedUsers, mentionUsers);
-      // Preserve Accept/Edit/Delete decisions where ids still match
       const prevById = new Map(current.map((p) => [p.id, p]));
 
       const merged = next.map((p) => {
@@ -263,28 +245,27 @@ function AppContent() {
         return {
           ...p,
           status: prev.status,
-          comment: prev.status === 'accepted' ? prev.comment : p.comment,
+          comment:
+            prev.status === 'accepted' || prev.status === 'deleted'
+              ? prev.comment
+              : p.comment,
           triggerText:
-            prev.status === 'accepted' ? prev.triggerText : p.triggerText,
+            prev.status === 'accepted' || prev.status === 'deleted'
+              ? prev.triggerText
+              : p.triggerText,
         };
       });
 
-      return merged.filter((p) => {
-        if (p.status !== 'pending') return true;
-        const fingerprintId = makeRejectFingerprintParts(p).fingerprintId;
-        return !rejectFingerprints.has(fingerprintId);
+      // Only fill still-pending items from saved period history.
+      return merged.map((p) => {
+        if (p.status !== 'pending') return p;
+        return applyReviewHistory([p], reviewHistory)[0] ?? p;
       });
     });
-  }, [managedUsers, mentionUsers, pivot, rejectFingerprints]);
+  }, [managedUsers, mentionUsers, pivot, reviewHistory]);
 
-  const handleRejectSaved = useCallback((fingerprintId: string) => {
-    setRejectFingerprints((current) => {
-      const next = new Set(current);
-      next.add(fingerprintId);
-      return next;
-    });
-    setRejectMemoryLoaded(true);
-  }, []);
+  const periodStart = pivot?.periodStart ?? '';
+  const periodEnd = pivot?.periodEnd ?? '';
 
   if (!isAuthenticated || !isAllowed) {
     return <LoginPage />;
@@ -364,18 +345,19 @@ function AppContent() {
 
                 {proposalsLoading ? (
                   <p className="mb-4 text-sm text-blue-600">
-                    Applying saved reject memory…
+                    Loading previous review decisions…
                   </p>
                 ) : (
                   <HighlightReview
                     key={sourceLabel ?? 'review'}
                     proposals={highlightProposals}
                     onChange={setHighlightProposals}
+                    periodStart={periodStart}
+                    periodEnd={periodEnd}
                     onDownload={() => {
                       void handleDownloadZip();
                     }}
                     downloading={downloading}
-                    onRejectSaved={handleRejectSaved}
                   />
                 )}
               </>
@@ -400,8 +382,7 @@ function AppContent() {
 
           <FeedbackMemoryPanel
             onCleared={() => {
-              setRejectFingerprints(new Set());
-              setRejectMemoryLoaded(true);
+              // Saved rejects panel clear only; review history is separate.
             }}
           />
         </div>
