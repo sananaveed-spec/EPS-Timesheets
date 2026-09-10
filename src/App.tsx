@@ -264,6 +264,8 @@ function AppContent() {
           ...p,
           status: prev.status,
           comment: prev.status === 'accepted' ? prev.comment : p.comment,
+          triggerText:
+            prev.status === 'accepted' ? prev.triggerText : p.triggerText,
         };
       });
 
