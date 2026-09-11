@@ -607,26 +607,50 @@ function computeReportCard(
   return { totalHours, sickHours, ptoHours, accruedPTOApplies, accruedPTOTime, timesheetNeedsFilled, timesheetRuleApplies, sickTime, ptoTime, compTime, compTimeAccrued, compTimeApplies, overtimeTime, overtimeApplies, reviewNeeded };
 }
 
-async function loadLogo(): Promise<{ dataUrl: string; width: number; height: number } | null> {
+async function loadLogo(): Promise<{
+  dataUrl: string;
+  width: number;
+  height: number;
+  format: 'JPEG' | 'PNG';
+} | null> {
   try {
     const res = await fetch('/logo.png');
     if (!res.ok) return null;
     const blob = await res.blob();
-    const dataUrl = await new Promise<string>((resolve, reject) => {
+    const sourceUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result as string);
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
 
-    const { width, height } = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-      img.onerror = reject;
-      img.src = dataUrl;
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = sourceUrl;
     });
 
-    return { dataUrl, width, height };
+    // Downscale for PDF: logo only prints ~50×25mm; embedding the full
+    // ~700KB PNG is the main reason each file hits multi‑MB sizes.
+    const maxPx = 360;
+    const scale = Math.min(1, maxPx / Math.max(img.naturalWidth, img.naturalHeight));
+    const width = Math.max(1, Math.round(img.naturalWidth * scale));
+    const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return { dataUrl: sourceUrl, width: img.naturalWidth, height: img.naturalHeight, format: 'PNG' };
+    }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+
+    return { dataUrl, width, height, format: 'JPEG' };
   } catch {
     return null;
   }
@@ -636,7 +660,7 @@ function drawReportCardPage(
   doc: jsPDF,
   employeeName: string,
   reportCard: ReportCard,
-  logo: { dataUrl: string; width: number; height: number } | null,
+  logo: { dataUrl: string; width: number; height: number; format: 'JPEG' | 'PNG' } | null,
   dates: string[],
   categorySets: ReturnType<typeof buildCategorySets>,
   periodStart?: string,
@@ -649,11 +673,21 @@ function drawReportCardPage(
   if (logo) {
     const maxWidth = 50;
     const maxHeight = 25;
-    const scale = Math.min(maxWidth / logo.width, maxHeight / logo.height, 1);
+    // logo.width/height are pixels of the already-downscaled image.
+    const scale = Math.min(maxWidth / logo.width, maxHeight / logo.height);
     const logoWidth = logo.width * scale;
     const logoHeight = logo.height * scale;
     const logoX = (pageWidth - logoWidth) / 2;
-    doc.addImage(logo.dataUrl, 'PNG', logoX, startY, logoWidth, logoHeight);
+    doc.addImage(
+      logo.dataUrl,
+      logo.format,
+      logoX,
+      startY,
+      logoWidth,
+      logoHeight,
+      undefined,
+      'FAST',
+    );
     startY += logoHeight + 8;
   }
 
@@ -1083,7 +1117,12 @@ export async function generatePdfsZip(
   const userSections = splitRowsByUser(pivot.rows);
 
   for (const { name, rows: sectionRows } of userSections) {
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4',
+      compress: true,
+    });
     const reportCard = computeReportCard(
       sectionRows,
       dates,
@@ -1344,10 +1383,17 @@ const columnStyles = {
     }
 
     const pdfBlob = doc.output('blob');
-    zip.file(`${sanitizeFilename(name)}.pdf`, pdfBlob);
+    zip.file(`${sanitizeFilename(name)}.pdf`, pdfBlob, {
+      compression: 'DEFLATE',
+      compressionOptions: { level: 9 },
+    });
   }
 
-  const zipBlob = await zip.generateAsync({ type: 'blob' });
+  const zipBlob = await zip.generateAsync({
+    type: 'blob',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  });
   const url = URL.createObjectURL(zipBlob);
   // Ensure browsers reliably treat this as a download (not a navigation).
   const a = document.createElement('a');

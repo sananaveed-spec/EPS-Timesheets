@@ -1,21 +1,10 @@
 import { useMemo, useState } from 'react';
 import type { HighlightProposal } from '../lib/highlightRules';
 import { groupProposalsByEmployee } from '../lib/highlightRules';
-import { makeRejectFingerprintParts } from '../lib/feedbackMemoryFingerprint';
-import { saveRejectMemoryEntry } from '../lib/feedbackMemoryClient';
 import {
   clearReviewHistoryEntry,
   saveReviewHistoryEntry,
 } from '../lib/reviewHistoryClient';
-
-const REJECT_REASON_OPTIONS = [
-  { id: 'false_positive', label: 'False positive / not needed' },
-  { id: 'already_handled', label: 'Already handled elsewhere' },
-  { id: 'wrong_match', label: 'Matched text is wrong' },
-  { id: 'other', label: 'Other' },
-] as const;
-
-type RejectReasonId = (typeof REJECT_REASON_OPTIONS)[number]['id'];
 
 interface HighlightReviewProps {
   proposals: HighlightProposal[];
@@ -50,15 +39,9 @@ export function HighlightReview({
   const [draftTrigger, setDraftTrigger] = useState('');
   const [draftComment, setDraftComment] = useState('');
   const [rejectingId, setRejectingId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState<RejectReasonId>('false_positive');
-  const [rejectNote, setRejectNote] = useState('');
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
-  const [bulkRejectReason, setBulkRejectReason] = useState<RejectReasonId>(
-    'false_positive',
-  );
-  const [bulkRejectNote, setBulkRejectNote] = useState('');
   const [rejectSaving, setRejectSaving] = useState(false);
-  const [rejectSaveError, setRejectSaveError] = useState<string | null>(null);
+  const [historySaveError, setHistorySaveError] = useState<string | null>(null);
 
   const safeIndex =
     groups.length === 0 ? 0 : Math.min(fileIndex, groups.length - 1);
@@ -96,7 +79,7 @@ export function HighlightReview({
     try {
       await persistDecision(proposal, 'accepted');
     } catch (e) {
-      setRejectSaveError(
+      setHistorySaveError(
         e instanceof Error ? e.message : 'Failed to save accept history.',
       );
     }
@@ -112,7 +95,7 @@ export function HighlightReview({
         periodEnd,
       });
     } catch (e) {
-      setRejectSaveError(
+      setHistorySaveError(
         e instanceof Error ? e.message : 'Failed to restore highlight.',
       );
     }
@@ -134,65 +117,38 @@ export function HighlightReview({
     );
   };
 
-  const updateRejectStatus = (ids: Set<string>) => {
-    onChange(
-      proposals.map((p) => (ids.has(p.id) ? { ...p, status: 'deleted' } : p)),
-    );
-  };
-
-  const saveRejectForProposal = async (
-    proposal: HighlightProposal,
-    reason: RejectReasonId,
-    note: string,
-  ) => {
-    const fingerprintParts = makeRejectFingerprintParts(proposal);
+  const deleteProposal = async (proposal: HighlightProposal) => {
+    updateProposal(proposal.id, { status: 'deleted' });
+    setRejectingId(null);
     try {
       await persistDecision(proposal, 'deleted');
-      await saveRejectMemoryEntry({
-        fingerprintParts,
-        reason,
-        note,
-      });
     } catch (e) {
-      setRejectSaveError(
-        e instanceof Error ? e.message : 'Failed to save reject memory.',
+      setHistorySaveError(
+        e instanceof Error ? e.message : 'Failed to save delete history.',
       );
     }
   };
 
-  const saveBulkRejects = async () => {
+  const deleteAllOnFile = async () => {
     if (!current) return;
     setRejectSaving(true);
-    setRejectSaveError(null);
+    setHistorySaveError(null);
     try {
       const ids = new Set(current.proposals.map((p) => p.id));
-      const payloads = current.proposals.map((proposal) => ({
-        proposal,
-        fingerprintParts: makeRejectFingerprintParts(proposal),
-      }));
-
-      updateRejectStatus(ids);
+      const toDelete = current.proposals.filter((p) => p.status !== 'deleted');
+      onChange(
+        proposals.map((p) =>
+          ids.has(p.id) ? { ...p, status: 'deleted' } : p,
+        ),
+      );
       await Promise.all(
-        payloads.map(async ({ proposal, fingerprintParts }) => {
-          try {
-            await persistDecision(proposal, 'deleted');
-            await saveRejectMemoryEntry({
-              fingerprintParts,
-              reason: bulkRejectReason,
-              note: bulkRejectNote,
-            });
-          } catch (e) {
-            setRejectSaveError(
-              e instanceof Error ? e.message : 'Failed to save reject memory.',
-            );
-          }
-        }),
+        toDelete.map((p) =>
+          persistDecision(p, 'deleted').catch(() => undefined),
+        ),
       );
     } finally {
       setRejectSaving(false);
       setBulkRejectOpen(false);
-      setBulkRejectReason('false_positive');
-      setBulkRejectNote('');
     }
   };
 
@@ -243,9 +199,9 @@ export function HighlightReview({
         </div>
       </div>
 
-      {rejectSaveError && (
+      {historySaveError && (
         <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          {rejectSaveError}
+          {historySaveError}
         </div>
       )}
 
@@ -274,9 +230,7 @@ export function HighlightReview({
             type="button"
             onClick={() => {
               setBulkRejectOpen(true);
-              setBulkRejectReason('false_positive');
-              setBulkRejectNote('');
-              setRejectSaveError(null);
+              setHistorySaveError(null);
             }}
             disabled={rejectSaving}
             className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
@@ -291,50 +245,22 @@ export function HighlightReview({
           <div className="text-sm font-medium text-gray-900">
             Delete all proposals on {current.employeeName}.pdf?
           </div>
-          <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr]">
-            <label className="block text-xs font-medium text-gray-700 md:col-span-1">
-              Reject reason
-              <select
-                value={bulkRejectReason}
-                onChange={(e) =>
-                  setBulkRejectReason(e.target.value as RejectReasonId)
-                }
-                className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900"
-              >
-                {REJECT_REASON_OPTIONS.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-xs font-medium text-gray-700 md:col-span-1">
-              Optional note
-              <textarea
-                value={bulkRejectNote}
-                onChange={(event) => setBulkRejectNote(event.target.value)}
-                rows={3}
-                className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-blue-500"
-              />
-            </label>
-          </div>
+          <p className="mt-1 text-xs text-gray-600">
+            They will show as deleted next time you run this same period.
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
               disabled={rejectSaving}
-              onClick={() => void saveBulkRejects()}
+              onClick={() => void deleteAllOnFile()}
               className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {rejectSaving ? 'Saving…' : 'Confirm delete (and save reject memory)'}
+              {rejectSaving ? 'Saving…' : 'Confirm delete'}
             </button>
             <button
               type="button"
               disabled={rejectSaving}
-              onClick={() => {
-                setBulkRejectOpen(false);
-                setBulkRejectReason('false_positive');
-                setBulkRejectNote('');
-              }}
+              onClick={() => setBulkRejectOpen(false)}
               className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Cancel
@@ -439,7 +365,7 @@ export function HighlightReview({
                         });
                         setEditingId(null);
                         void persistDecision(updated, 'accepted').catch((e) => {
-                          setRejectSaveError(
+                          setHistorySaveError(
                             e instanceof Error
                               ? e.message
                               : 'Failed to save accept history.',
@@ -465,72 +391,31 @@ export function HighlightReview({
                 <div className="mt-3 flex flex-wrap gap-2">
                   {isRejecting ? (
                     <>
-                      <label className="block w-full text-xs font-medium text-gray-700">
-                        Reject reason
-                        <select
-                          value={rejectReason}
-                          onChange={(e) =>
-                            setRejectReason(e.target.value as RejectReasonId)
-                          }
-                          className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900"
-                        >
-                          {REJECT_REASON_OPTIONS.map((opt) => (
-                            <option key={opt.id} value={opt.id}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="block w-full text-xs font-medium text-gray-700">
-                        Optional note
-                        <textarea
-                          value={rejectNote}
-                          onChange={(event) => setRejectNote(event.target.value)}
-                          rows={3}
-                          className="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-blue-500"
-                        />
-                      </label>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          disabled={rejectSaving}
-                          onClick={() => {
-                            const reasonToSave = rejectReason;
-                            const noteToSave = rejectNote;
-                            updateProposal(item.id, { status: 'deleted' });
-                            setRejectingId(null);
-                            setRejectNote('');
-                            setRejectReason('false_positive');
-                            setRejectSaving(true);
-                            void (async () => {
-                              try {
-                                await saveRejectForProposal(
-                                  item,
-                                  reasonToSave,
-                                  noteToSave,
-                                );
-                              } finally {
-                                setRejectSaving(false);
-                              }
-                            })();
-                          }}
-                          className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {rejectSaving ? 'Saving…' : 'Confirm delete'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={rejectSaving}
-                          onClick={() => {
-                            setRejectingId(null);
-                            setRejectNote('');
-                            setRejectReason('false_positive');
-                          }}
-                          className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                      <p className="w-full text-xs text-gray-600">
+                        Delete this highlight? It will stay marked deleted on
+                        the next run of this period.
+                      </p>
+                      <button
+                        type="button"
+                        disabled={rejectSaving}
+                        onClick={() => {
+                          setRejectSaving(true);
+                          void deleteProposal(item).finally(() =>
+                            setRejectSaving(false),
+                          );
+                        }}
+                        className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {rejectSaving ? 'Saving…' : 'Confirm delete'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={rejectSaving}
+                        onClick={() => setRejectingId(null)}
+                        className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
                     </>
                   ) : item.status === 'deleted' ? (
                     <button
@@ -557,9 +442,7 @@ export function HighlightReview({
                         type="button"
                         onClick={() => {
                           setRejectingId(item.id);
-                          setRejectReason('false_positive');
-                          setRejectNote('');
-                          setRejectSaveError(null);
+                          setHistorySaveError(null);
                         }}
                         className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                       >
@@ -568,38 +451,34 @@ export function HighlightReview({
                     </>
                   ) : (
                     <>
-                  <button
-                    type="button"
-                    onClick={() => void acceptProposal(item)}
-                    className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
-                  >
-                    Accept
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingId(item.id);
-                      setDraftTrigger(item.triggerText || item.matchedText);
-                      setDraftComment(item.comment);
-                    }}
-                    className="rounded border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 hover:bg-blue-100"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      (() => {
-                        setRejectingId(item.id);
-                        setRejectReason('false_positive');
-                        setRejectNote('');
-                        setRejectSaveError(null);
-                      })()
-                    }
-                    className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    Delete
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => void acceptProposal(item)}
+                        className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(item.id);
+                          setDraftTrigger(item.triggerText || item.matchedText);
+                          setDraftComment(item.comment);
+                        }}
+                        className="rounded border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 hover:bg-blue-100"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRejectingId(item.id);
+                          setHistorySaveError(null);
+                        }}
+                        className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Delete
+                      </button>
                     </>
                   )}
                 </div>

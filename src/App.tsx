@@ -4,7 +4,6 @@ import { getAccountEmail, isAllowedOrganizationEmail } from './auth/organization
 import { logoutCompletely } from './auth/session';
 import { ReportSetup } from './components/ReportSetup';
 import { HighlightReview } from './components/HighlightReview';
-import { FeedbackMemoryPanel } from './components/FeedbackMemoryPanel';
 import { LoginPage } from './components/LoginPage';
 import { UserManager } from './components/UserManager';
 import { fetchClockifyDetailedRange } from './lib/clockifyApi';
@@ -25,7 +24,6 @@ import {
   saveManagedUsers,
   saveMentionUsers,
 } from './lib/userSettings';
-import { fetchRejectFingerprints } from './lib/feedbackMemoryClient';
 import { fetchReviewHistory } from './lib/reviewHistoryClient';
 import {
   applyReviewHistory,
@@ -108,9 +106,6 @@ function AppContent() {
                 history = [];
                 setReviewHistory([]);
               }
-
-              // Keep Saved rejects panel usable, but do not hide deletes anymore.
-              void fetchRejectFingerprints().catch(() => undefined);
 
               const proposals = proposeHighlights(
                 nextPivot,
@@ -378,12 +373,6 @@ function AppContent() {
             onRemoveUsers={handleRemoveUsers}
             onAddMentions={handleAddMentions}
             onRemoveMentions={handleRemoveMentions}
-          />
-
-          <FeedbackMemoryPanel
-            onCleared={() => {
-              // Saved rejects panel clear only; review history is separate.
-            }}
           />
         </div>
       </div>
