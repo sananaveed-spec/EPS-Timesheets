@@ -5,6 +5,7 @@ import {
 } from '../lib/clockifyApi';
 import { sameEmployeeName } from '../lib/employeeCategories';
 import { sameClockifyPerson } from '../lib/clockifyPeople';
+import { OFFICE_CATEGORY_LABELS } from '../lib/officeCategories';
 import type { ManagedUser, OfficeCategory } from '../types';
 
 interface ReportSetupProps {
@@ -14,7 +15,6 @@ interface ReportSetupProps {
     employeeNames: string[],
   ) => void;
   savedUsers: ManagedUser[];
-  officeCategories: OfficeCategory[];
   disabled?: boolean;
 }
 
@@ -56,7 +56,6 @@ function buildSelectableEmployees(
 export function ReportSetup({
   onFetch,
   savedUsers,
-  officeCategories,
   disabled,
 }: ReportSetupProps) {
   const [step, setStep] = useState<SetupStep>('dates');
@@ -165,48 +164,40 @@ export function ReportSetup({
     });
   }, [sortedEmployees]);
 
-  /** Managed users that also belong to an office — match by Clockify id/name. */
+  /** Managed users with an office affiliation — select/deselect that group. */
   const officeSelectableNames = useMemo(() => {
-    const byOfficeId = new Map<string, string[]>();
-    for (const office of officeCategories) {
-      const names: string[] = [];
-      const seen = new Set<string>();
-
-      for (const member of office.members) {
-        const match = sortedEmployees.find((employee) =>
-          sameClockifyPerson(
-            {
-              clockifyUserId: member.clockifyUserId,
-              name: member.name,
-            },
-            { clockifyUserId: employee.id, name: employee.name },
-          ),
-        );
-
-        if (match && !seen.has(match.name)) {
-          seen.add(match.name);
-          names.push(match.name);
-        }
-      }
-
-      byOfficeId.set(office.id, names);
+    const byOffice = new Map<OfficeCategory, string[]>();
+    for (const key of Object.keys(OFFICE_CATEGORY_LABELS) as OfficeCategory[]) {
+      byOffice.set(key, []);
     }
-    return byOfficeId;
-  }, [officeCategories, sortedEmployees]);
 
-  const sortedOfficeCategories = useMemo(
-    () => [...officeCategories].sort((a, b) => a.name.localeCompare(b.name)),
-    [officeCategories],
-  );
+    for (const user of savedUsers) {
+      if (!user.office) continue;
+      const match = sortedEmployees.find((employee) =>
+        sameClockifyPerson(
+          {
+            clockifyUserId: user.clockifyUserId,
+            name: user.name,
+          },
+          { clockifyUserId: employee.id, name: employee.name },
+        ),
+      );
+      if (!match) continue;
+      const list = byOffice.get(user.office);
+      if (list && !list.includes(match.name)) list.push(match.name);
+    }
+
+    return byOffice;
+  }, [savedUsers, sortedEmployees]);
 
   const handleToggleOfficeCategory = useCallback(
-    (officeId: string) => {
-      const names = officeSelectableNames.get(officeId) ?? [];
+    (office: OfficeCategory) => {
+      const names = officeSelectableNames.get(office) ?? [];
       if (names.length === 0) return;
       setSelectedNames((current) => {
         const next = new Set(current);
-        const allSelected = names.every((name) => next.has(name));
-        if (allSelected) {
+        const allOfficeSelected = names.every((name) => next.has(name));
+        if (allOfficeSelected) {
           for (const name of names) next.delete(name);
         } else {
           for (const name of names) next.add(name);
@@ -364,10 +355,10 @@ export function ReportSetup({
           </span>
         </div>
 
-        {sortedOfficeCategories.length > 0 && (
-          <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-gray-100 pt-2">
-            {sortedOfficeCategories.map((office) => {
-              const names = officeSelectableNames.get(office.id) ?? [];
+        <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-gray-100 pt-2">
+          {(Object.keys(OFFICE_CATEGORY_LABELS) as OfficeCategory[]).map(
+            (office) => {
+              const names = officeSelectableNames.get(office) ?? [];
               const allOfficeSelected =
                 names.length > 0 &&
                 names.every((name) => selectedNames.has(name));
@@ -377,7 +368,7 @@ export function ReportSetup({
 
               return (
                 <label
-                  key={office.id}
+                  key={office}
                   className="flex items-center gap-2 text-sm font-medium text-gray-800"
                 >
                   <input
@@ -387,24 +378,20 @@ export function ReportSetup({
                       if (input) input.indeterminate = someOfficeSelected;
                     }}
                     disabled={disabled || names.length === 0}
-                    onChange={() => handleToggleOfficeCategory(office.id)}
+                    onChange={() => handleToggleOfficeCategory(office)}
                     className="h-4 w-4 rounded border-gray-300 text-blue-600"
                   />
                   <span>
-                    {office.name}
+                    {OFFICE_CATEGORY_LABELS[office]}
                     <span className="ml-1 font-normal text-gray-500">
-                      ({names.length}
-                      {office.members.length !== names.length
-                        ? ` of ${office.members.length}`
-                        : ''}{' '}
-                      in Manage Users)
+                      ({names.length})
                     </span>
                   </span>
                 </label>
               );
-            })}
-          </div>
-        )}
+            },
+          )}
+        </div>
       </div>
 
       <div className="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-white p-3">

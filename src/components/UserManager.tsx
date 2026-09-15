@@ -10,252 +10,37 @@ import {
   fetchClockifyUsers,
   type ClockifyUserSummary,
 } from '../lib/clockifyApi';
+import { sameClockifyPerson } from '../lib/clockifyPeople';
+import {
+  OFFICE_CATEGORY_LABELS,
+} from '../lib/officeCategories';
 import type {
   EmployeeCategory,
-  OfficeCategory,
   ManagedUser,
   MentionUser,
+  OfficeCategory,
 } from '../types';
-import { sameClockifyPerson } from '../lib/clockifyPeople';
 
 interface UserManagerProps {
   users: ManagedUser[];
   mentionUsers: MentionUser[];
-  officeCategories: OfficeCategory[];
   onAddUsers: (
     people: ClockifyUserSummary[],
     category: EmployeeCategory,
+    office: OfficeCategory | null,
   ) => void;
-  onUpdateUser: (id: string, category: EmployeeCategory) => void;
+  onUpdateUser: (
+    id: string,
+    category: EmployeeCategory,
+    office: OfficeCategory | null,
+  ) => void;
   onSyncClockifyNames: (clockifyUsers: ClockifyUserSummary[]) => void;
   onRemoveUsers: (ids: string[]) => void;
-  onAddMentions: (people: ClockifyUserSummary[]) => void;
+  onAddMentions: (
+    people: ClockifyUserSummary[],
+    office: OfficeCategory,
+  ) => void;
   onRemoveMentions: (ids: string[]) => void;
-  onAddOfficeMembers: (officeId: string, people: ClockifyUserSummary[]) => void;
-  onRemoveOfficeMembers: (officeId: string, memberIds: string[]) => void;
-  onSyncOfficeMembers: (clockifyUsers: ClockifyUserSummary[]) => void;
-}
-
-interface OfficeCategoryMembersPanelProps {
-  office: OfficeCategory;
-  clockifyUsers: ClockifyUserSummary[];
-  loadingUsers: boolean;
-  userError: string | null;
-  onAddMembers: (officeId: string, people: ClockifyUserSummary[]) => void;
-  onRemoveMembers: (officeId: string, memberIds: string[]) => void;
-  onRetryLoadUsers: () => void;
-}
-
-function OfficeCategoryMembersPanel({
-  office,
-  clockifyUsers,
-  loadingUsers,
-  userError,
-  onAddMembers,
-  onRemoveMembers,
-  onRetryLoadUsers,
-}: OfficeCategoryMembersPanelProps) {
-  const [query, setQuery] = useState('');
-  const [selectedRemainingIds, setSelectedRemainingIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [showMembers, setShowMembers] = useState(false);
-
-  const remaining = useMemo(
-    () =>
-      clockifyUsers
-        .filter(
-          (employee) =>
-            !office.members.some((member) =>
-              sameClockifyPerson(
-                {
-                  clockifyUserId: member.clockifyUserId,
-                  name: member.name,
-                },
-                { clockifyUserId: employee.id, name: employee.name },
-              ),
-            ),
-        )
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [clockifyUsers, office.members],
-  );
-
-  const filteredRemaining = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return remaining;
-    return remaining.filter(
-      (employee) =>
-        employee.name.toLowerCase().includes(q) ||
-        employee.email.toLowerCase().includes(q),
-    );
-  }, [query, remaining]);
-
-  const sortedMembers = useMemo(
-    () =>
-      [...office.members].sort((a, b) => a.name.localeCompare(b.name)),
-    [office.members],
-  );
-
-  const toggleId = useCallback(
-    (id: string, setter: Dispatch<SetStateAction<Set<string>>>) => {
-      setter((current) => {
-        const next = new Set(current);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
-    },
-    [],
-  );
-
-  const handleAdd = useCallback(() => {
-    const people = remaining.filter((employee) =>
-      selectedRemainingIds.has(employee.id),
-    );
-    if (people.length === 0) return;
-    onAddMembers(office.id, people);
-    setSelectedRemainingIds(new Set());
-  }, [office.id, onAddMembers, remaining, selectedRemainingIds]);
-
-  const handleDelete = useCallback(() => {
-    if (selectedMemberIds.size === 0) return;
-    onRemoveMembers(office.id, Array.from(selectedMemberIds));
-    setSelectedMemberIds(new Set());
-  }, [office.id, onRemoveMembers, selectedMemberIds]);
-
-  return (
-    <div>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">{office.name}</h2>
-          <p className="mt-0.5 text-sm text-gray-600">
-            Clockify members for this office or shop.
-          </p>
-        </div>
-        <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-          {office.members.length} saved
-        </span>
-      </div>
-
-      {loadingUsers ? (
-        <p className="mt-4 text-sm text-blue-600">Loading Clockify users...</p>
-      ) : userError ? (
-        <div className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          <p>{userError}</p>
-          <button
-            type="button"
-            onClick={onRetryLoadUsers}
-            className="mt-1 text-sm font-medium text-red-800 underline"
-          >
-            Retry
-          </button>
-        </div>
-      ) : (
-        <form
-          className="mt-4 space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            handleAdd();
-          }}
-        >
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search Clockify users to add"
-            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
-          />
-          <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2">
-            {filteredRemaining.length === 0 ? (
-              <p className="px-2 py-3 text-center text-sm text-gray-500">
-                {remaining.length === 0
-                  ? 'All Clockify users are already in this category.'
-                  : `No users match “${query.trim()}”.`}
-              </p>
-            ) : (
-              filteredRemaining.map((employee) => (
-                <label
-                  key={employee.id}
-                  className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 hover:bg-gray-50"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedRemainingIds.has(employee.id)}
-                    onChange={() =>
-                      toggleId(employee.id, setSelectedRemainingIds)
-                    }
-                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600"
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium text-gray-900">
-                      {employee.name}
-                    </span>
-                    {employee.email && (
-                      <span className="block truncate text-xs text-gray-500">
-                        {employee.email}
-                      </span>
-                    )}
-                  </span>
-                </label>
-              ))
-            )}
-          </div>
-          <button
-            type="submit"
-            disabled={selectedRemainingIds.size === 0}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
-          >
-            Add members
-          </button>
-        </form>
-      )}
-
-      <div className="mt-4 space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-medium text-gray-800">Saved members</p>
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={selectedMemberIds.size === 0}
-            className="rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400 disabled:hover:bg-transparent"
-          >
-            Delete
-          </button>
-        </div>
-        {showMembers &&
-          sortedMembers.map((member) => (
-            <label
-              key={member.id}
-              className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2.5"
-            >
-              <input
-                type="checkbox"
-                checked={selectedMemberIds.has(member.id)}
-                onChange={() => toggleId(member.id, setSelectedMemberIds)}
-                className="h-4 w-4 rounded border-gray-300 text-blue-600"
-              />
-              <span className="text-sm font-medium text-gray-900">
-                {member.name}
-              </span>
-            </label>
-          ))}
-        {sortedMembers.length === 0 ? (
-          <p className="text-sm text-gray-500">No members in this category yet.</p>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowMembers((current) => !current)}
-            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-50"
-          >
-            {showMembers ? 'Hide saved members' : 'Show saved members'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
 }
 
 const CATEGORY_LABELS: Record<EmployeeCategory, string> = {
@@ -269,25 +54,32 @@ function firstName(fullName: string): string {
   return base.split(/\s+/)[0] || base;
 }
 
-function mentionPreview(users: MentionUser[]): string {
-  const names = users.map((user) => firstName(user.name)).filter(Boolean);
+function mentionPreview(
+  users: MentionUser[],
+  office: OfficeCategory,
+): string {
+  const names = users
+    .filter((user) => user.office === office)
+    .map((user) => firstName(user.name))
+    .filter(Boolean);
   if (names.length === 0) return '';
   return `${names.join('/')}....`;
+}
+
+function officeLabel(office: OfficeCategory | null | undefined): string {
+  if (!office) return 'No office';
+  return OFFICE_CATEGORY_LABELS[office];
 }
 
 export function UserManager({
   users,
   mentionUsers,
-  officeCategories,
   onAddUsers,
   onUpdateUser,
   onSyncClockifyNames,
   onRemoveUsers,
   onAddMentions,
   onRemoveMentions,
-  onAddOfficeMembers,
-  onRemoveOfficeMembers,
-  onSyncOfficeMembers,
 }: UserManagerProps) {
   const [clockifyUsers, setClockifyUsers] = useState<ClockifyUserSummary[]>(
     [],
@@ -297,6 +89,7 @@ export function UserManager({
 
   const [category, setCategory] =
     useState<EmployeeCategory>('full-time-hourly');
+  const [office, setOffice] = useState<OfficeCategory | ''>('');
   const [remainingQuery, setRemainingQuery] = useState('');
   const [selectedRemainingIds, setSelectedRemainingIds] = useState<Set<string>>(
     () => new Set(),
@@ -307,10 +100,14 @@ export function UserManager({
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editCategory, setEditCategory] =
     useState<EmployeeCategory>('full-time-hourly');
+  const [editOffice, setEditOffice] = useState<OfficeCategory | ''>('');
   const [showSavedUsers, setShowSavedUsers] = useState(false);
   const [showMentionUsers, setShowMentionUsers] = useState(false);
 
   const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionOffice, setMentionOffice] = useState<OfficeCategory>(
+    'eps-clovis-office',
+  );
   const [selectedMentionRemainingIds, setSelectedMentionRemainingIds] =
     useState<Set<string>>(() => new Set());
   const [selectedSavedMentionIds, setSelectedSavedMentionIds] = useState<
@@ -331,7 +128,6 @@ export function UserManager({
   }, []);
 
   useEffect(() => {
-    // Defer to avoid triggering the "setState in effect" lint rule.
     void Promise.resolve().then(() => {
       void loadClockifyUsers();
     });
@@ -340,8 +136,7 @@ export function UserManager({
   useEffect(() => {
     if (clockifyUsers.length === 0) return;
     onSyncClockifyNames(clockifyUsers);
-    onSyncOfficeMembers(clockifyUsers);
-  }, [clockifyUsers, onSyncClockifyNames, onSyncOfficeMembers]);
+  }, [clockifyUsers, onSyncClockifyNames]);
 
   const remainingUsers = useMemo(
     () =>
@@ -377,18 +172,20 @@ export function UserManager({
       clockifyUsers
         .filter(
           (employee) =>
-            !mentionUsers.some((user) =>
-              sameClockifyPerson(
-                {
-                  clockifyUserId: user.clockifyUserId,
-                  name: user.name,
-                },
-                { clockifyUserId: employee.id, name: employee.name },
-              ),
+            !mentionUsers.some(
+              (user) =>
+                user.office === mentionOffice &&
+                sameClockifyPerson(
+                  {
+                    clockifyUserId: user.clockifyUserId,
+                    name: user.name,
+                  },
+                  { clockifyUserId: employee.id, name: employee.name },
+                ),
             ),
         )
         .sort((a, b) => a.name.localeCompare(b.name)),
-    [clockifyUsers, mentionUsers],
+    [clockifyUsers, mentionOffice, mentionUsers],
   );
 
   const filteredRemainingMentions = useMemo(() => {
@@ -406,13 +203,8 @@ export function UserManager({
     [users],
   );
 
-  const sortedOfficeCategories = useMemo(
-    () =>
-      [...officeCategories].sort((a, b) => a.name.localeCompare(b.name)),
-    [officeCategories],
-  );
-
-  const greeting = mentionPreview(mentionUsers);
+  const greetingClovis = mentionPreview(mentionUsers, 'eps-clovis-office');
+  const greetingFresno = mentionPreview(mentionUsers, 'eps-fresno-shop');
 
   const toggleId = useCallback(
     (id: string, setter: Dispatch<SetStateAction<Set<string>>>) => {
@@ -431,9 +223,9 @@ export function UserManager({
       selectedRemainingIds.has(employee.id),
     );
     if (people.length === 0) return;
-    onAddUsers(people, category);
+    onAddUsers(people, category, office === '' ? null : office);
     setSelectedRemainingIds(new Set());
-  }, [category, onAddUsers, remainingUsers, selectedRemainingIds]);
+  }, [category, office, onAddUsers, remainingUsers, selectedRemainingIds]);
 
   const handleDeleteUsers = useCallback(() => {
     if (selectedSavedIds.size === 0) return;
@@ -447,6 +239,7 @@ export function UserManager({
   const handleStartEdit = useCallback((user: ManagedUser) => {
     setEditingUserId(user.id);
     setEditCategory(user.category);
+    setEditOffice(user.office ?? '');
     setShowSavedUsers(true);
   }, []);
 
@@ -456,18 +249,23 @@ export function UserManager({
 
   const handleSaveEdit = useCallback(() => {
     if (!editingUserId) return;
-    onUpdateUser(editingUserId, editCategory);
+    onUpdateUser(editingUserId, editCategory, editOffice === '' ? null : editOffice);
     setEditingUserId(null);
-  }, [editCategory, editingUserId, onUpdateUser]);
+  }, [editCategory, editOffice, editingUserId, onUpdateUser]);
 
   const handleAddMentions = useCallback(() => {
     const people = remainingMentions.filter((employee) =>
       selectedMentionRemainingIds.has(employee.id),
     );
     if (people.length === 0) return;
-    onAddMentions(people);
+    onAddMentions(people, mentionOffice);
     setSelectedMentionRemainingIds(new Set());
-  }, [onAddMentions, remainingMentions, selectedMentionRemainingIds]);
+  }, [
+    mentionOffice,
+    onAddMentions,
+    remainingMentions,
+    selectedMentionRemainingIds,
+  ]);
 
   const handleDeleteMentions = useCallback(() => {
     if (selectedSavedMentionIds.size === 0) return;
@@ -482,8 +280,8 @@ export function UserManager({
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Manage Users</h2>
             <p className="mt-1 text-sm text-gray-600">
-              Select remaining Clockify employees, choose a category, then add
-              them. Saved users keep their current data unless you edit them.
+              Pick Clockify employees, set employment category (required), and
+              optionally assign EPS Clovis Office or EPS Fresno Shop.
             </p>
           </div>
           <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
@@ -556,28 +354,54 @@ export function UserManager({
                 ))
               )}
             </div>
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
-              <select
-                value={category}
-                onChange={(event) =>
-                  setCategory(event.target.value as EmployeeCategory)
-                }
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
-              >
-                {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="submit"
-                disabled={selectedRemainingIds.size === 0}
-                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
-              >
-                Add User
-              </button>
+            <div className="grid gap-3">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-gray-600">
+                  Employment category (required)
+                </span>
+                <select
+                  value={category}
+                  onChange={(event) =>
+                    setCategory(event.target.value as EmployeeCategory)
+                  }
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
+                >
+                  {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-gray-600">
+                  Office (optional)
+                </span>
+                <select
+                  value={office}
+                  onChange={(event) =>
+                    setOffice(event.target.value as OfficeCategory | '')
+                  }
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
+                >
+                  <option value="">No office</option>
+                  {Object.entries(OFFICE_CATEGORY_LABELS).map(
+                    ([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
             </div>
+            <button
+              type="submit"
+              disabled={selectedRemainingIds.size === 0}
+              className="w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
+            >
+              Add User
+            </button>
           </form>
         )}
 
@@ -609,30 +433,50 @@ export function UserManager({
                     aria-label={`Select ${user.name}`}
                   />
                   <div className="min-w-0 flex-1 space-y-2">
-                    <div className="font-medium text-gray-900">
-                      {user.name}
-                    </div>
+                    <div className="font-medium text-gray-900">{user.name}</div>
                     {isEditing ? (
-                      <select
-                        value={editCategory}
-                        onChange={(event) =>
-                          setEditCategory(
-                            event.target.value as EmployeeCategory,
-                          )
-                        }
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
-                      >
-                        {Object.entries(CATEGORY_LABELS).map(
-                          ([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ),
-                        )}
-                      </select>
+                      <div className="grid gap-2">
+                        <select
+                          value={editCategory}
+                          onChange={(event) =>
+                            setEditCategory(
+                              event.target.value as EmployeeCategory,
+                            )
+                          }
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
+                        >
+                          {Object.entries(CATEGORY_LABELS).map(
+                            ([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                        <select
+                          value={editOffice}
+                          onChange={(event) =>
+                            setEditOffice(
+                              event.target.value as OfficeCategory | '',
+                            )
+                          }
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
+                        >
+                          <option value="">No office</option>
+                          {Object.entries(OFFICE_CATEGORY_LABELS).map(
+                            ([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </div>
                     ) : (
                       <div className="text-sm text-gray-600">
                         {CATEGORY_LABELS[user.category]}
+                        {' · '}
+                        {officeLabel(user.office)}
                       </div>
                     )}
                   </div>
@@ -684,8 +528,8 @@ export function UserManager({
               Comment mentions
             </h2>
             <p className="mt-1 text-sm text-gray-600">
-              Choose Clockify users to mention in review comments. First names
-              are used, for example Abdur/Samir....
+              Choose Clockify users and an office. Review comments for employees
+              in that office start with those first names (e.g. Abdur/Samir....).
             </p>
           </div>
           <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
@@ -693,16 +537,25 @@ export function UserManager({
           </span>
         </div>
 
-        {greeting ? (
-          <p className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
-            Comments will start with{' '}
-            <span className="font-medium text-gray-900">{greeting}</span>
-          </p>
-        ) : (
-          <p className="mt-3 text-sm text-gray-500">
-            Add mention users to prefix comments with their first names.
-          </p>
-        )}
+        <div className="mt-3 space-y-2">
+          {greetingClovis ? (
+            <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
+              EPS Clovis Office comments:{' '}
+              <span className="font-medium text-gray-900">{greetingClovis}</span>
+            </p>
+          ) : null}
+          {greetingFresno ? (
+            <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
+              EPS Fresno Shop comments:{' '}
+              <span className="font-medium text-gray-900">{greetingFresno}</span>
+            </p>
+          ) : null}
+          {!greetingClovis && !greetingFresno ? (
+            <p className="text-sm text-gray-500">
+              Add mention users for Clovis and/or Fresno to prefix comments.
+            </p>
+          ) : null}
+        </div>
 
         {!loadingUsers && !userError && (
           <form
@@ -712,6 +565,25 @@ export function UserManager({
               handleAddMentions();
             }}
           >
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-gray-600">
+                Office (required)
+              </span>
+              <select
+                value={mentionOffice}
+                onChange={(event) => {
+                  setMentionOffice(event.target.value as OfficeCategory);
+                  setSelectedMentionRemainingIds(new Set());
+                }}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500"
+              >
+                {Object.entries(OFFICE_CATEGORY_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <input
               type="search"
               value={mentionQuery}
@@ -723,7 +595,7 @@ export function UserManager({
               {filteredRemainingMentions.length === 0 ? (
                 <p className="px-2 py-4 text-center text-sm text-gray-500">
                   {remainingMentions.length === 0
-                    ? 'All Clockify users are already in the mention list.'
+                    ? `All Clockify users are already mentions for ${OFFICE_CATEGORY_LABELS[mentionOffice]}.`
                     : `No remaining users match “${mentionQuery.trim()}”.`}
                 </p>
               ) : (
@@ -757,7 +629,7 @@ export function UserManager({
             <button
               type="submit"
               disabled={selectedMentionRemainingIds.size === 0}
-              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
+              className="w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
             >
               Save mentions
             </button>
@@ -777,22 +649,31 @@ export function UserManager({
             </button>
           </div>
           {showMentionUsers &&
-            mentionUsers.map((user) => (
-              <label
-                key={user.id}
-                className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 px-4 py-3"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedSavedMentionIds.has(user.id)}
-                  onChange={() => toggleId(user.id, setSelectedSavedMentionIds)}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600"
-                />
-                <span className="font-medium text-gray-900">
-                  {user.name} ({firstName(user.name)})
-                </span>
-              </label>
-            ))}
+            [...mentionUsers]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((user) => (
+                <label
+                  key={user.id}
+                  className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 px-4 py-3"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedSavedMentionIds.has(user.id)}
+                    onChange={() =>
+                      toggleId(user.id, setSelectedSavedMentionIds)
+                    }
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                  />
+                  <span className="min-w-0">
+                    <span className="block font-medium text-gray-900">
+                      {user.name} ({firstName(user.name)})
+                    </span>
+                    <span className="block text-xs text-gray-500">
+                      {OFFICE_CATEGORY_LABELS[user.office]}
+                    </span>
+                  </span>
+                </label>
+              ))}
           {mentionUsers.length > 0 && (
             <button
               type="button"
@@ -804,27 +685,6 @@ export function UserManager({
           )}
         </div>
       </section>
-
-      <div className="space-y-4">
-        {sortedOfficeCategories.map((office) => (
-          <section
-            key={office.id}
-            className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-200"
-          >
-            <OfficeCategoryMembersPanel
-              office={office}
-              clockifyUsers={clockifyUsers}
-              loadingUsers={loadingUsers}
-              userError={userError}
-              onAddMembers={onAddOfficeMembers}
-              onRemoveMembers={onRemoveOfficeMembers}
-              onRetryLoadUsers={() => {
-                void loadClockifyUsers();
-              }}
-            />
-          </section>
-        ))}
-      </div>
     </div>
   );
 }

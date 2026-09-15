@@ -1,31 +1,19 @@
-import type { OfficeCategory, ManagedUser, MentionUser } from '../types';
+import type { ManagedUser, MentionUser, OfficeCategory } from '../types';
+import { sameEmployeeName } from './employeeCategories';
 import {
-  createDefaultOfficeCategories,
-  mergeDefaultOfficeCategories,
+  isOfficeCategory,
+  officeCategoryFromLegacyName,
 } from './officeCategories';
-import { mergeDefaultManagedUsers } from './employeeCategories';
 
 const STORAGE_KEY = 'clockify-converter-managed-users';
 const MENTION_STORAGE_KEY = 'clockify-converter-mention-users';
-const OFFICE_STORAGE_KEY = 'clockify-converter-office-categories';
+const LEGACY_OFFICE_STORAGE_KEY = 'clockify-converter-office-categories';
 const LEGACY_LOCATION_STORAGE_KEY = 'clockify-converter-managed-locations';
-const DEFAULTS_MERGED_KEY =
-  'clockify-converter-managed-users-defaults-merged-v1';
-const OFFICE_DEFAULTS_MERGED_KEY =
-  'clockify-converter-office-categories-defaults-merged-v1';
-/** One-time wipe of generic EPS Office / EPS Offices category names. */
-const REMOVE_EPS_OFFICE_KEY =
-  'clockify-converter-remove-eps-office-category-v2';
-
-/** Exact generic labels only — never match "EPS Clovis Office" etc. */
-function isGenericEpsOfficeName(name: string): boolean {
-  const n = name.trim().toLowerCase().replace(/\s+/g, ' ');
-  return n === 'eps office' || n === 'eps offices';
-}
-
-function stripGenericEpsOffice(offices: OfficeCategory[]): OfficeCategory[] {
-  return offices.filter((office) => !isGenericEpsOfficeName(office.name));
-}
+const OFFICE_FIELD_MIGRATED_KEY =
+  'clockify-converter-managed-users-office-field-v1';
+/** One-time clear of seeded Manage Users so the list starts empty. */
+const CLEAR_SEEDED_USERS_KEY =
+  'clockify-converter-managed-users-cleared-v1';
 
 function readStoredList<T>(key: string): T[] {
   if (typeof window === 'undefined') return [];
@@ -41,133 +29,108 @@ function readStoredList<T>(key: string): T[] {
   }
 }
 
-function normalizeOfficeCategories(raw: unknown[]): OfficeCategory[] {
-  return raw
-    .map((item) => {
-      const office = item as OfficeCategory;
-      if (typeof office?.id !== 'string' || typeof office?.name !== 'string') {
-        return null;
-      }
-      const members = Array.isArray(office.members)
-        ? office.members
-            .filter(
-              (m) => typeof m?.id === 'string' && typeof m?.name === 'string',
-            )
-            .map((m) => ({
-              id: m.id,
-              name: m.name,
-              ...(typeof m.clockifyUserId === 'string'
-                ? { clockifyUserId: m.clockifyUserId }
-                : {}),
-            }))
-        : [];
-      return { id: office.id, name: office.name, members };
-    })
-    .filter((office): office is OfficeCategory => office !== null);
-}
-
-function migrateLegacyLocations(): OfficeCategory[] {
-  const legacy = readStoredList<{ id: string; name: string }>(
-    LEGACY_LOCATION_STORAGE_KEY,
-  ).filter((loc) => typeof loc?.name === 'string');
-
-  if (legacy.length === 0) return [];
-
-  return legacy.map((loc) => ({
-    id: typeof loc.id === 'string' ? loc.id : crypto.randomUUID(),
-    name: loc.name,
-    members: [],
-  }));
-}
-
-export function loadOfficeCategories(): OfficeCategory[] {
-  let stored = normalizeOfficeCategories(
-    readStoredList<OfficeCategory>(OFFICE_STORAGE_KEY),
-  );
-
-  if (typeof window === 'undefined') {
-    return mergeDefaultOfficeCategories(stripGenericEpsOffice(stored));
+function normalizeManagedUser(raw: ManagedUser): ManagedUser | null {
+  if (
+    typeof raw?.id !== 'string' ||
+    typeof raw?.name !== 'string' ||
+    typeof raw?.category !== 'string'
+  ) {
+    return null;
   }
 
-  if (stored.length === 0) {
-    const migrated = migrateLegacyLocations();
-    if (migrated.length > 0) stored = migrated;
-  }
+  const office =
+    raw.office === null
+      ? null
+      : isOfficeCategory(raw.office)
+        ? raw.office
+        : undefined;
 
-  stored = stripGenericEpsOffice(stored);
-
-  // Also strip from the older location key so it cannot remigrate later.
-  const legacy = readStoredList<{ id: string; name: string }>(
-    LEGACY_LOCATION_STORAGE_KEY,
-  );
-  if (legacy.some((loc) => isGenericEpsOfficeName(loc.name ?? ''))) {
-    window.localStorage.setItem(
-      LEGACY_LOCATION_STORAGE_KEY,
-      JSON.stringify(
-        legacy.filter((loc) => !isGenericEpsOfficeName(loc.name ?? '')),
-      ),
-    );
-  }
-
-  if (window.localStorage.getItem(REMOVE_EPS_OFFICE_KEY) !== '1') {
-    window.localStorage.setItem(REMOVE_EPS_OFFICE_KEY, '1');
-  }
-
-  const alreadyMerged =
-    window.localStorage.getItem(OFFICE_DEFAULTS_MERGED_KEY) === '1';
-  const seeded =
-    alreadyMerged && stored.length > 0
-      ? stored
-      : stored.length > 0
-        ? mergeDefaultOfficeCategories(stored)
-        : createDefaultOfficeCategories();
-
-  // Always persist the cleaned list so a stale React save cannot resurrect it.
-  window.localStorage.setItem(OFFICE_DEFAULTS_MERGED_KEY, '1');
-  window.localStorage.setItem(OFFICE_STORAGE_KEY, JSON.stringify(seeded));
-  return seeded;
+  return {
+    id: raw.id,
+    name: raw.name,
+    category: raw.category,
+    ...(office !== undefined ? { office } : {}),
+    ...(typeof raw.clockifyUserId === 'string'
+      ? { clockifyUserId: raw.clockifyUserId }
+      : {}),
+  };
 }
 
-export function saveOfficeCategories(offices: OfficeCategory[]): void {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(
-    OFFICE_STORAGE_KEY,
-    JSON.stringify(stripGenericEpsOffice(offices)),
-  );
-}
+/**
+ * One-time: copy affiliations from the old separate office-member lists
+ * onto matching Manage Users records.
+ */
+function migrateOfficeMembersOntoManagedUsers(
+  users: ManagedUser[],
+): ManagedUser[] {
+  if (typeof window === 'undefined') return users;
+  if (window.localStorage.getItem(OFFICE_FIELD_MIGRATED_KEY) === '1') {
+    return users;
+  }
 
-export function isGenericEpsOfficeCategoryName(name: string): boolean {
-  return isGenericEpsOfficeName(name);
+  type LegacyOffice = {
+    name?: string;
+    members?: Array<{ name?: string; clockifyUserId?: string }>;
+  };
+
+  const legacyOffices = readStoredList<LegacyOffice>(LEGACY_OFFICE_STORAGE_KEY);
+  const byPerson = new Map<string, OfficeCategory>();
+
+  for (const office of legacyOffices) {
+    const affiliation = officeCategoryFromLegacyName(office.name ?? '');
+    if (!affiliation || !Array.isArray(office.members)) continue;
+    for (const member of office.members) {
+      if (!member?.name) continue;
+      const key = (member.clockifyUserId || member.name).toLowerCase();
+      byPerson.set(key, affiliation);
+      byPerson.set(member.name.toLowerCase(), affiliation);
+    }
+  }
+
+  let changed = false;
+  const next = users.map((user) => {
+    if (user.office) return user;
+    const byId = user.clockifyUserId
+      ? byPerson.get(user.clockifyUserId.toLowerCase())
+      : undefined;
+    const byName = byPerson.get(user.name.toLowerCase());
+    const match =
+      byId ||
+      byName ||
+      [...byPerson.entries()].find(([k]) => sameEmployeeName(k, user.name))?.[1];
+    if (!match) return user;
+    changed = true;
+    return { ...user, office: match };
+  });
+
+  window.localStorage.setItem(OFFICE_FIELD_MIGRATED_KEY, '1');
+  window.localStorage.removeItem(LEGACY_OFFICE_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_LOCATION_STORAGE_KEY);
+
+  if (changed) {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  }
+  return next;
 }
 
 export function loadManagedUsers(): ManagedUser[] {
-  const stored = readStoredList<ManagedUser>(STORAGE_KEY)
-    .filter(
-      (user) =>
-        typeof user?.id === 'string' &&
-        typeof user?.name === 'string' &&
-        typeof user?.category === 'string',
-    )
-    .map((user) => ({
-      id: user.id,
-      name: user.name,
-      category: user.category,
-      ...(typeof user.clockifyUserId === 'string'
-        ? { clockifyUserId: user.clockifyUserId }
-        : {}),
-    }));
+  if (typeof window === 'undefined') return [];
 
-  if (typeof window === 'undefined') {
-    return mergeDefaultManagedUsers(stored);
+  // Wipe previously seeded / stored users once so Manage Users starts at 0.
+  if (window.localStorage.getItem(CLEAR_SEEDED_USERS_KEY) !== '1') {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+    window.localStorage.setItem(CLEAR_SEEDED_USERS_KEY, '1');
+    window.localStorage.setItem(OFFICE_FIELD_MIGRATED_KEY, '1');
+    window.localStorage.removeItem(LEGACY_OFFICE_STORAGE_KEY);
+    window.localStorage.removeItem(LEGACY_LOCATION_STORAGE_KEY);
+    return [];
   }
 
-  const alreadyMerged = window.localStorage.getItem(DEFAULTS_MERGED_KEY) === '1';
-  if (alreadyMerged && stored.length > 0) return stored;
+  const stored = readStoredList<ManagedUser>(STORAGE_KEY)
+    .map(normalizeManagedUser)
+    .filter((user): user is ManagedUser => user !== null);
 
-  const seeded = mergeDefaultManagedUsers(stored);
-  window.localStorage.setItem(DEFAULTS_MERGED_KEY, '1');
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
-  return seeded;
+  return migrateOfficeMembersOntoManagedUsers(stored);
 }
 
 export function saveManagedUsers(users: ManagedUser[]): void {
@@ -177,10 +140,16 @@ export function saveManagedUsers(users: ManagedUser[]): void {
 
 export function loadMentionUsers(): MentionUser[] {
   return readStoredList<MentionUser>(MENTION_STORAGE_KEY)
-    .filter((user) => typeof user?.id === 'string' && typeof user?.name === 'string')
+    .filter(
+      (user) =>
+        typeof user?.id === 'string' &&
+        typeof user?.name === 'string' &&
+        isOfficeCategory(user.office),
+    )
     .map((user) => ({
       id: user.id,
       name: user.name,
+      office: user.office,
       ...(typeof user.clockifyUserId === 'string'
         ? { clockifyUserId: user.clockifyUserId }
         : {}),

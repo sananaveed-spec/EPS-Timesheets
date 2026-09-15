@@ -1,81 +1,24 @@
-import type { OfficeCategory, OfficeMember } from '../types';
-import { sameEmployeeName } from './employeeCategories';
-import {
-  alignOfficeMembersToClockify,
-  type ClockifyPerson,
-} from './clockifyPeople';
+import type { OfficeCategory } from '../types';
 
-export const DEFAULT_OFFICE_NAMES = [
-  'EPS Clovis Office',
-  'EPS Fresno Shop',
-] as const;
+export type { OfficeCategory };
 
-export function sameOfficeCategoryName(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
+export const OFFICE_CATEGORY_LABELS: Record<OfficeCategory, string> = {
+  'eps-clovis-office': 'EPS Clovis Office',
+  'eps-fresno-shop': 'EPS Fresno Shop',
+};
+
+/** Fixed location names used in description matching (miles / errands). */
+export const OFFICE_LOCATION_NAMES = Object.values(OFFICE_CATEGORY_LABELS);
+
+export function isOfficeCategory(value: unknown): value is OfficeCategory {
+  return value === 'eps-clovis-office' || value === 'eps-fresno-shop';
 }
 
-export function createDefaultOfficeCategories(): OfficeCategory[] {
-  return DEFAULT_OFFICE_NAMES.map((name) => ({
-    id: crypto.randomUUID(),
-    name,
-    members: [],
-  }));
-}
-
-export function mergeDefaultOfficeCategories(
-  existing: OfficeCategory[],
-): OfficeCategory[] {
-  const next = existing.map((office) => ({
-    ...office,
-    members: Array.isArray(office.members) ? office.members : [],
-  }));
-
-  for (const name of DEFAULT_OFFICE_NAMES) {
-    if (next.some((office) => sameOfficeCategoryName(office.name, name))) {
-      continue;
-    }
-    next.push({ id: crypto.randomUUID(), name, members: [] });
-  }
-
-  return next;
-}
-
-/** @deprecated Prefer alignOfficeMembersToClockify — kept for call-site compatibility. */
-export function alignOfficeMembersWithClockify(
-  offices: OfficeCategory[],
-  clockifyUsers: ClockifyPerson[],
-  _managedUsers: { name: string }[] = [],
-): OfficeCategory[] {
-  return alignOfficeMembersToClockify(offices, clockifyUsers);
-}
-
-export function officeMemberNames(offices: OfficeCategory[]): string[] {
-  const names: string[] = [];
-  for (const office of offices) {
-    for (const member of office.members) {
-      if (member.name.trim()) names.push(member.name);
-    }
-  }
-  return names;
-}
-
-export function findOfficeMember(
-  offices: OfficeCategory[],
-  memberId: string,
-): { office: OfficeCategory; member: OfficeMember } | null {
-  for (const office of offices) {
-    const member = office.members.find((m) => m.id === memberId);
-    if (member) return { office, member };
-  }
+export function officeCategoryFromLegacyName(
+  name: string,
+): OfficeCategory | null {
+  const n = name.trim().toLowerCase();
+  if (n.includes('clovis')) return 'eps-clovis-office';
+  if (n.includes('fresno')) return 'eps-fresno-shop';
   return null;
-}
-
-export function sameOfficeMember(
-  a: { clockifyUserId?: string; name: string },
-  b: { clockifyUserId?: string; name: string },
-): boolean {
-  if (a.clockifyUserId && b.clockifyUserId) {
-    return a.clockifyUserId === b.clockifyUserId;
-  }
-  return sameEmployeeName(a.name, b.name);
 }

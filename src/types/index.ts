@@ -48,10 +48,16 @@ export type EmployeeCategory =
   | 'full-time-hourly'
   | 'part-time-hourly';
 
+/** Optional office affiliation on a managed user. */
+export type OfficeCategory = 'eps-clovis-office' | 'eps-fresno-shop';
+
 export interface ManagedUser {
   id: string;
   name: string;
+  /** Employment type — required. */
   category: EmployeeCategory;
+  /** EPS Clovis Office / EPS Fresno Shop — optional. */
+  office?: OfficeCategory | null;
   /** Clockify workspace user id — source of truth for the display name. */
   clockifyUserId?: string;
 }
@@ -59,19 +65,7 @@ export interface ManagedUser {
 export interface MentionUser {
   id: string;
   name: string;
+  /** Required — comments for this office use these mention names. */
+  office: OfficeCategory;
   clockifyUserId?: string;
-}
-
-/** Clockify employee assigned to an EPS office or shop category. */
-export interface OfficeMember {
-  id: string;
-  name: string;
-  clockifyUserId?: string;
-}
-
-/** EPS office/shop category with its own member list (like Manage Users). */
-export interface OfficeCategory {
-  id: string;
-  name: string;
-  members: OfficeMember[];
 }

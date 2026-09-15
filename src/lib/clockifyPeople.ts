@@ -1,8 +1,4 @@
-import type {
-  ManagedUser,
-  MentionUser,
-  OfficeCategory,
-} from '../types';
+import type { ManagedUser, MentionUser } from '../types';
 import { sameEmployeeName } from './employeeCategories';
 
 export type ClockifyPerson = {
@@ -35,10 +31,7 @@ export function alignManagedUsersToClockify(
   const next = users.map((user) => {
     const match = findClockifyPerson(clockifyUsers, user);
     if (!match) return user;
-    if (
-      match.name === user.name &&
-      match.id === user.clockifyUserId
-    ) {
+    if (match.name === user.name && match.id === user.clockifyUserId) {
       return user;
     }
     changed = true;
@@ -59,10 +52,7 @@ export function alignMentionUsersToClockify(
   const next = users.map((user) => {
     const match = findClockifyPerson(clockifyUsers, user);
     if (!match) return user;
-    if (
-      match.name === user.name &&
-      match.id === user.clockifyUserId
-    ) {
+    if (match.name === user.name && match.id === user.clockifyUserId) {
       return user;
     }
     changed = true;
@@ -73,35 +63,6 @@ export function alignMentionUsersToClockify(
     };
   });
   return changed ? next : users;
-}
-
-export function alignOfficeMembersToClockify(
-  offices: OfficeCategory[],
-  clockifyUsers: ClockifyPerson[],
-): OfficeCategory[] {
-  let changed = false;
-  const next = offices.map((office) => {
-    let officeChanged = false;
-    const members = office.members.map((member) => {
-      const match = findClockifyPerson(clockifyUsers, member);
-      if (!match) return member;
-      if (
-        match.name === member.name &&
-        match.id === member.clockifyUserId
-      ) {
-        return member;
-      }
-      officeChanged = true;
-      changed = true;
-      return {
-        ...member,
-        name: match.name,
-        clockifyUserId: match.id,
-      };
-    });
-    return officeChanged ? { ...office, members } : office;
-  });
-  return changed ? next : offices;
 }
 
 export function sameClockifyPerson(

@@ -7,16 +7,11 @@ import { HighlightReview } from './components/HighlightReview';
 import { LoginPage } from './components/LoginPage';
 import { UserManager } from './components/UserManager';
 import { fetchClockifyDetailedRange } from './lib/clockifyApi';
-import {
-  alignUsersWithClockify,
-} from './lib/employeeCategories';
+import { alignUsersWithClockify } from './lib/employeeCategories';
 import {
   alignMentionUsersToClockify,
   sameClockifyPerson,
 } from './lib/clockifyPeople';
-import {
-  alignOfficeMembersWithClockify,
-} from './lib/officeCategories';
 import {
   getAcceptedHighlights,
   proposeHighlights,
@@ -25,13 +20,10 @@ import {
 import { generatePdfsZip } from './lib/pdfGenerator';
 import { transformToPivot } from './lib/transformer';
 import {
-  loadOfficeCategories,
   loadManagedUsers,
   loadMentionUsers,
-  saveOfficeCategories,
   saveManagedUsers,
   saveMentionUsers,
-  isGenericEpsOfficeCategoryName,
 } from './lib/userSettings';
 import { fetchReviewHistory } from './lib/reviewHistoryClient';
 import {
@@ -40,9 +32,9 @@ import {
 } from './lib/reviewHistoryFingerprint';
 import type {
   EmployeeCategory,
-  OfficeCategory,
   ManagedUser,
   MentionUser,
+  OfficeCategory,
   PivotData,
 } from './types';
 
@@ -69,14 +61,10 @@ function AppContent() {
   const [mentionUsers, setMentionUsers] = useState<MentionUser[]>(
     () => loadMentionUsers(),
   );
-  const [officeCategories, setOfficeCategories] = useState<OfficeCategory[]>(
-    () => loadOfficeCategories(),
-  );
   const [reviewHistory, setReviewHistory] = useState<ReviewHistoryEntry[]>([]);
 
   useEffect(() => {
     setManagedUsers(loadManagedUsers());
-    setOfficeCategories(loadOfficeCategories());
   }, []);
 
   useEffect(() => {
@@ -86,17 +74,6 @@ function AppContent() {
   useEffect(() => {
     saveMentionUsers(mentionUsers);
   }, [mentionUsers]);
-
-  useEffect(() => {
-    const cleaned = officeCategories.filter(
-      (office) => !isGenericEpsOfficeCategoryName(office.name),
-    );
-    if (cleaned.length !== officeCategories.length) {
-      setOfficeCategories(cleaned);
-      return;
-    }
-    saveOfficeCategories(cleaned);
-  }, [officeCategories]);
 
   const handleDateRangeFetch = useCallback(
     (startDate: string, endDate: string, employeeNames: string[]) => {
@@ -136,7 +113,6 @@ function AppContent() {
                 nextPivot,
                 managedUsers,
                 mentionUsers,
-                officeCategories,
               );
               setHighlightProposals(applyReviewHistory(proposals, history));
               setProposalsLoading(false);
@@ -148,7 +124,7 @@ function AppContent() {
         },
       );
     },
-    [managedUsers, mentionUsers, officeCategories],
+    [managedUsers, mentionUsers],
   );
 
   const handleDownloadZip = useCallback(async () => {
@@ -177,6 +153,7 @@ function AppContent() {
     (
       people: { id: string; name: string }[],
       category: EmployeeCategory,
+      office: OfficeCategory | null,
     ) => {
       setManagedUsers((currentUsers) => {
         const nextUsers = [...currentUsers];
@@ -199,6 +176,7 @@ function AppContent() {
               name: person.name,
               clockifyUserId: person.id,
               category,
+              office,
             };
             continue;
           }
@@ -208,6 +186,7 @@ function AppContent() {
             name: person.name,
             clockifyUserId: person.id,
             category,
+            office,
           });
         }
 
@@ -218,10 +197,14 @@ function AppContent() {
   );
 
   const handleUpdateUser = useCallback(
-    (id: string, category: EmployeeCategory) => {
+    (
+      id: string,
+      category: EmployeeCategory,
+      office: OfficeCategory | null,
+    ) => {
       setManagedUsers((currentUsers) =>
         currentUsers.map((user) =>
-          user.id === id ? { ...user, category } : user,
+          user.id === id ? { ...user, category, office } : user,
         ),
       );
     },
@@ -240,15 +223,6 @@ function AppContent() {
     [],
   );
 
-  const handleSyncOfficeMembers = useCallback(
-    (clockifyUsers: { id: string; name: string }[]) => {
-      setOfficeCategories((current) =>
-        alignOfficeMembersWithClockify(current, clockifyUsers),
-      );
-    },
-    [],
-  );
-
   const handleRemoveUsers = useCallback((ids: string[]) => {
     const idSet = new Set(ids);
     setManagedUsers((currentUsers) =>
@@ -257,25 +231,28 @@ function AppContent() {
   }, []);
 
   const handleAddMentions = useCallback(
-    (people: { id: string; name: string }[]) => {
+    (people: { id: string; name: string }[], office: OfficeCategory) => {
       setMentionUsers((currentUsers) => {
         const nextUsers = [...currentUsers];
 
         for (const person of people) {
-          const existingIndex = nextUsers.findIndex((user) =>
-            sameClockifyPerson(
-              {
-                clockifyUserId: user.clockifyUserId,
-                name: user.name,
-              },
-              { clockifyUserId: person.id, name: person.name },
-            ),
+          const existingIndex = nextUsers.findIndex(
+            (user) =>
+              user.office === office &&
+              sameClockifyPerson(
+                {
+                  clockifyUserId: user.clockifyUserId,
+                  name: user.name,
+                },
+                { clockifyUserId: person.id, name: person.name },
+              ),
           );
           if (existingIndex >= 0) {
             nextUsers[existingIndex] = {
               ...nextUsers[existingIndex],
               name: person.name,
               clockifyUserId: person.id,
+              office,
             };
             continue;
           }
@@ -283,6 +260,7 @@ function AppContent() {
             id: crypto.randomUUID(),
             name: person.name,
             clockifyUserId: person.id,
+            office,
           });
         }
 
@@ -299,70 +277,10 @@ function AppContent() {
     );
   }, []);
 
-  const handleAddOfficeMembers = useCallback(
-    (officeId: string, people: { id: string; name: string }[]) => {
-      setOfficeCategories((current) =>
-        current.map((office) => {
-          if (office.id !== officeId) return office;
-          const members = [...office.members];
-          for (const person of people) {
-            const existingIndex = members.findIndex((m) =>
-              sameClockifyPerson(
-                {
-                  clockifyUserId: m.clockifyUserId,
-                  name: m.name,
-                },
-                { clockifyUserId: person.id, name: person.name },
-              ),
-            );
-            if (existingIndex >= 0) {
-              members[existingIndex] = {
-                ...members[existingIndex],
-                name: person.name,
-                clockifyUserId: person.id,
-              };
-              continue;
-            }
-            members.push({
-              id: crypto.randomUUID(),
-              name: person.name,
-              clockifyUserId: person.id,
-            });
-          }
-          return { ...office, members };
-        }),
-      );
-    },
-    [],
-  );
-
-  const handleRemoveOfficeMembers = useCallback(
-    (officeId: string, memberIds: string[]) => {
-      const idSet = new Set(memberIds);
-      setOfficeCategories((current) =>
-        current.map((office) =>
-          office.id === officeId
-            ? {
-                ...office,
-                members: office.members.filter((m) => !idSet.has(m.id)),
-              }
-            : office,
-        ),
-      );
-    },
-    [],
-  );
-
-  // Re-propose when managed users, mentions, or office categories change
   useEffect(() => {
     if (!pivot) return;
     setHighlightProposals((current) => {
-      const next = proposeHighlights(
-        pivot,
-        managedUsers,
-        mentionUsers,
-        officeCategories,
-      );
+      const next = proposeHighlights(pivot, managedUsers, mentionUsers);
       const prevById = new Map(current.map((p) => [p.id, p]));
 
       const merged = next.map((p) => {
@@ -382,13 +300,12 @@ function AppContent() {
         };
       });
 
-      // Only fill still-pending items from saved period history.
       return merged.map((p) => {
         if (p.status !== 'pending') return p;
         return applyReviewHistory([p], reviewHistory)[0] ?? p;
       });
     });
-  }, [managedUsers, mentionUsers, officeCategories, pivot, reviewHistory]);
+  }, [managedUsers, mentionUsers, pivot, reviewHistory]);
 
   const periodStart = pivot?.periodStart ?? '';
   const periodEnd = pivot?.periodEnd ?? '';
@@ -430,7 +347,6 @@ function AppContent() {
               <ReportSetup
                 onFetch={handleDateRangeFetch}
                 savedUsers={managedUsers}
-                officeCategories={officeCategories}
                 disabled={loading}
               />
             </div>
@@ -499,16 +415,12 @@ function AppContent() {
           <UserManager
             users={managedUsers}
             mentionUsers={mentionUsers}
-            officeCategories={officeCategories}
             onAddUsers={handleAddUsers}
             onUpdateUser={handleUpdateUser}
             onSyncClockifyNames={handleSyncClockifyNames}
             onRemoveUsers={handleRemoveUsers}
             onAddMentions={handleAddMentions}
             onRemoveMentions={handleRemoveMentions}
-            onAddOfficeMembers={handleAddOfficeMembers}
-            onRemoveOfficeMembers={handleRemoveOfficeMembers}
-            onSyncOfficeMembers={handleSyncOfficeMembers}
           />
         </div>
       </div>

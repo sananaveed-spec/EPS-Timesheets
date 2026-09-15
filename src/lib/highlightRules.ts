@@ -1,6 +1,5 @@
 import type {
   EmployeeCategory,
-  OfficeCategory,
   ManagedUser,
   MentionUser,
   PivotData,
@@ -11,7 +10,9 @@ import {
   DEFAULT_FULL_TIME_SALARIED,
   DEFAULT_PART_TIME_HOURLY,
   normalizeEmployeeName,
+  sameEmployeeName,
 } from './employeeCategories';
+import { OFFICE_LOCATION_NAMES } from './officeCategories';
 
 export type HighlightStatus = 'pending' | 'accepted' | 'deleted';
 
@@ -47,6 +48,19 @@ export interface HighlightProposal {
 function firstName(employeeName: string): string {
   const base = normalizeEmployeeName(employeeName);
   return base.split(/\s+/)[0] || base || 'Employee';
+}
+
+function mentionsForEmployee(
+  employeeName: string,
+  managedUsers: ManagedUser[],
+  mentionUsers: MentionUser[],
+): MentionUser[] {
+  const managed = managedUsers.find((user) =>
+    sameEmployeeName(user.name, employeeName),
+  );
+  const office = managed?.office;
+  if (!office) return [];
+  return mentionUsers.filter((user) => user.office === office);
 }
 
 function mentionFirstNames(mentionUsers: MentionUser[]): string[] {
@@ -334,7 +348,7 @@ function isPersonalTravel(description: string): boolean {
 /** IN-SHOP / office errands (pickup supplies, laptop) — miles not required. */
 function isShopOrOfficeErrand(
   description: string,
-  offices: OfficeCategory[] = [],
+  locationNames: string[] = OFFICE_LOCATION_NAMES,
 ): boolean {
   const d = description.toLowerCase();
   if (/\bin[- ]?shop\b/i.test(d)) return true;
@@ -353,20 +367,20 @@ function isShopOrOfficeErrand(
     return true;
   }
 
-  if (pickup && descriptionMentionsOfficeCategory(description, offices)) {
+  if (pickup && descriptionMentionsOfficeLocation(description, locationNames)) {
     return true;
   }
 
   return false;
 }
 
-function descriptionMentionsOfficeCategory(
+function descriptionMentionsOfficeLocation(
   description: string,
-  offices: OfficeCategory[],
+  locationNames: string[],
 ): boolean {
   const d = description.toLowerCase();
-  for (const loc of offices) {
-    const name = loc.name.trim().toLowerCase();
+  for (const loc of locationNames) {
+    const name = loc.trim().toLowerCase();
     if (!name) continue;
     if (d.includes(name)) return true;
     const withoutEps = name.replace(/^eps(?:\/allumiax)?\s+/i, '').trim();
@@ -478,7 +492,7 @@ function isProfessionalTravel(description: string): boolean {
 
 function isTravelOnSite(
   description: string,
-  offices: OfficeCategory[] = [],
+  locationNames: string[] = OFFICE_LOCATION_NAMES,
 ): boolean {
   const d = description.toLowerCase().trim();
 
@@ -491,7 +505,7 @@ function isTravelOnSite(
     return false;
   }
   if (isPersonalTravel(description)) return false;
-  if (isShopOrOfficeErrand(description, offices)) return false;
+  if (isShopOrOfficeErrand(description, locationNames)) return false;
   if (isSiteReference(description) && !hasActualSiteTravel(description)) {
     return false;
   }
@@ -647,6 +661,7 @@ function pushUnique(
 /** One review card per description row — combine multiple rule hits. */
 function mergeProposalsByRow(
   proposals: HighlightProposal[],
+  managedUsers: ManagedUser[],
   mentionUsers: MentionUser[],
 ): HighlightProposal[] {
   const groups = new Map<string, HighlightProposal[]>();
@@ -685,6 +700,12 @@ function mergeProposalsByRow(
     );
     const primary = sorted[0]!;
 
+    const mentions = mentionsForEmployee(
+      primary.employeeName,
+      managedUsers,
+      mentionUsers,
+    );
+
     // Proposal Time + job walk: one future-billable note, not Miles/Billable.
     if (
       isProposalTime(primary.projectLabel) &&
@@ -704,7 +725,7 @@ function mergeProposalsByRow(
         ruleId: 'future_billable',
         ruleLabel: RULE_LABELS.future_billable,
         triggerText: trigger,
-        comment: withMentions(mentionUsers, 'This will be future billable?'),
+        comment: withMentions(mentions, 'This will be future billable?'),
         status: 'pending',
       });
       continue;
@@ -713,7 +734,7 @@ function mergeProposalsByRow(
     const uniqueComments = [
       ...new Set(sorted.map((g) => g.comment.trim()).filter(Boolean)),
     ];
-    const greeting = mentionGreetingRegex(mentionUsers);
+    const greeting = mentionGreetingRegex(mentions);
     let hasMentionGreeting = false;
     const comments = uniqueComments
       .map((comment) => {
@@ -833,7 +854,6 @@ export function proposeHighlights(
   pivot: PivotData,
   managedUsers: ManagedUser[] = [],
   mentionUsers: MentionUser[] = [],
-  officeCategories: OfficeCategory[] = [],
 ): HighlightProposal[] {
   const categorySets = buildCategorySets(managedUsers);
   const proposals: HighlightProposal[] = [];
@@ -846,6 +866,11 @@ export function proposeHighlights(
   );
 
   for (const { name: employeeName, rows: sectionRows } of sections) {
+    const mentions = mentionsForEmployee(
+      employeeName,
+      managedUsers,
+      mentionUsers,
+    );
     const employeeFirst = firstName(employeeName);
     let currentProjectLabel = '';
     let currentTag = '';
@@ -887,7 +912,7 @@ export function proposeHighlights(
         !isPlanningTravel(desc) &&
         !hasNamedDriver(desc, employeeFirstNames) &&
         (isSiteSurveyTag(currentTag) ||
-          isTravelOnSite(desc, officeCategories)) &&
+          isTravelOnSite(desc)) &&
         !hasMiles(desc) &&
         !hasZeroMiles(desc);
       if (needsMiles) {
@@ -899,8 +924,7 @@ export function proposeHighlights(
           triggerText: sentenceContaining(desc, travelPatterns) || desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(
-            mentionUsers,
+          comment: withMentions(mentions,
             'Mention who drove, so the miles can be tracked against that person’s entry.',
           ),
         });
@@ -917,8 +941,7 @@ export function proposeHighlights(
           projectLabel: currentProjectLabel,
           tag: currentTag,
           comment:
-            withMentions(
-              mentionUsers,
+            withMentions(mentions,
               'If miles are 0 then why it is mentioned? may be a typo?',
             ),
         });
@@ -937,7 +960,7 @@ export function proposeHighlights(
           triggerText: hoursSentence || desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(mentionUsers, 'May need to split this entry.'),
+          comment: withMentions(mentions, 'May need to split this entry.'),
         });
       }
 
@@ -956,8 +979,7 @@ export function proposeHighlights(
           triggerText: milesSentence || desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(
-            mentionUsers,
+          comment: withMentions(mentions,
             'Miles are mentioned. This may be billable/Future billable?',
           ),
         });
@@ -990,18 +1012,15 @@ export function proposeHighlights(
       if (futureSentence) {
         let futureComment: string | null = null;
         if (proposalJobWalk) {
-          futureComment = withMentions(
-            mentionUsers,
+          futureComment = withMentions(mentions,
             'This will be future billable?',
           );
         } else if (uncertainFutureSentence) {
-          futureComment = withMentions(
-            mentionUsers,
+          futureComment = withMentions(mentions,
             'Kindly check this is future billable or not?',
           );
         } else if (!projectAlreadyFutureBillable) {
-          futureComment = withMentions(
-            mentionUsers,
+          futureComment = withMentions(mentions,
             'Move to future billable category? Take action as needed.',
           );
         }
@@ -1040,8 +1059,7 @@ export function proposeHighlights(
           triggerText: openJobSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(
-            mentionUsers,
+          comment: withMentions(mentions,
             'Kindly shift this to specific job category, or create a job number and send to him',
           ),
         });
@@ -1083,7 +1101,7 @@ export function proposeHighlights(
           triggerText: billableSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(mentionUsers, 'Billable?'),
+          comment: withMentions(mentions, 'Billable?'),
         });
       }
 
@@ -1115,7 +1133,7 @@ export function proposeHighlights(
           triggerText: codingSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(mentionUsers, 'Charge to correct job?'),
+          comment: withMentions(mentions, 'Charge to correct job?'),
         });
       }
 
@@ -1139,8 +1157,7 @@ export function proposeHighlights(
             triggerText: desc.trim(),
             projectLabel: currentProjectLabel,
             tag: currentTag,
-            comment: withMentions(
-              mentionUsers,
+            comment: withMentions(mentions,
               `${workedHolidayDates.join(', ')} was a federal holiday. Will the hours worked be added to Comp Time?`,
             ),
           });
@@ -1180,7 +1197,7 @@ export function proposeHighlights(
           triggerText: internalNoteSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(mentionUsers, 'please note this point'),
+          comment: withMentions(mentions, 'please note this point'),
         });
       }
 
@@ -1194,8 +1211,7 @@ export function proposeHighlights(
           triggerText: desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
-          comment: withMentions(
-            mentionUsers,
+          comment: withMentions(mentions,
             'Review this Admin/Office Time entry.',
           ),
         });
@@ -1203,7 +1219,7 @@ export function proposeHighlights(
     }
   }
 
-  return mergeProposalsByRow(proposals, mentionUsers);
+  return mergeProposalsByRow(proposals, managedUsers, mentionUsers);
 }
 
 export function groupProposalsByEmployee(
