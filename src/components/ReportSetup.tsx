@@ -4,7 +4,8 @@ import {
   type ClockifyUserSummary,
 } from '../lib/clockifyApi';
 import { sameEmployeeName } from '../lib/employeeCategories';
-import type { ManagedUser } from '../types';
+import { sameClockifyPerson } from '../lib/clockifyPeople';
+import type { ManagedUser, OfficeCategory } from '../types';
 
 interface ReportSetupProps {
   onFetch: (
@@ -13,6 +14,7 @@ interface ReportSetupProps {
     employeeNames: string[],
   ) => void;
   savedUsers: ManagedUser[];
+  officeCategories: OfficeCategory[];
   disabled?: boolean;
 }
 
@@ -35,11 +37,15 @@ function buildSelectableEmployees(
 ): ClockifyUserSummary[] {
   return savedUsers
     .map((user) => {
-      const match = clockifyUsers.find((employee) =>
-        sameEmployeeName(employee.name, user.name),
-      );
+      const match =
+        (user.clockifyUserId &&
+          clockifyUsers.find((employee) => employee.id === user.clockifyUserId)) ||
+        clockifyUsers.find((employee) =>
+          sameEmployeeName(employee.name, user.name),
+        );
+      // Always prefer the live Clockify name/id when available.
       return {
-        id: match?.id ?? user.id,
+        id: match?.id ?? user.clockifyUserId ?? user.id,
         name: match?.name ?? user.name,
         email: match?.email ?? '',
       };
@@ -50,6 +56,7 @@ function buildSelectableEmployees(
 export function ReportSetup({
   onFetch,
   savedUsers,
+  officeCategories,
   disabled,
 }: ReportSetupProps) {
   const [step, setStep] = useState<SetupStep>('dates');
@@ -158,6 +165,58 @@ export function ReportSetup({
     });
   }, [sortedEmployees]);
 
+  /** Managed users that also belong to an office — match by Clockify id/name. */
+  const officeSelectableNames = useMemo(() => {
+    const byOfficeId = new Map<string, string[]>();
+    for (const office of officeCategories) {
+      const names: string[] = [];
+      const seen = new Set<string>();
+
+      for (const member of office.members) {
+        const match = sortedEmployees.find((employee) =>
+          sameClockifyPerson(
+            {
+              clockifyUserId: member.clockifyUserId,
+              name: member.name,
+            },
+            { clockifyUserId: employee.id, name: employee.name },
+          ),
+        );
+
+        if (match && !seen.has(match.name)) {
+          seen.add(match.name);
+          names.push(match.name);
+        }
+      }
+
+      byOfficeId.set(office.id, names);
+    }
+    return byOfficeId;
+  }, [officeCategories, sortedEmployees]);
+
+  const sortedOfficeCategories = useMemo(
+    () => [...officeCategories].sort((a, b) => a.name.localeCompare(b.name)),
+    [officeCategories],
+  );
+
+  const handleToggleOfficeCategory = useCallback(
+    (officeId: string) => {
+      const names = officeSelectableNames.get(officeId) ?? [];
+      if (names.length === 0) return;
+      setSelectedNames((current) => {
+        const next = new Set(current);
+        const allSelected = names.every((name) => next.has(name));
+        if (allSelected) {
+          for (const name of names) next.delete(name);
+        } else {
+          for (const name of names) next.add(name);
+        }
+        return next;
+      });
+    },
+    [officeSelectableNames],
+  );
+
   const handleEmployeesNext = useCallback(() => {
     const names = sortedEmployees
       .filter((employee) => selectedNames.has(employee.name))
@@ -240,7 +299,7 @@ export function ReportSetup({
           </p>
           <p className="mt-1 text-xs text-gray-600">
             {startDate} to {endDate}. Showing {sortedEmployees.length} saved
-            user{sortedEmployees.length === 1 ? '' : 's'}.
+            user{sortedEmployees.length === 1 ? '' : 's'} from Manage Users.
           </p>
         </div>
         <button
@@ -277,31 +336,75 @@ export function ReportSetup({
         </div>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3">
-        <label className="flex items-center gap-2 text-sm font-medium text-gray-800">
-          <input
-            type="checkbox"
-            checked={searchQuery.trim() ? allFilteredSelected : allSelected}
-            ref={(input) => {
-              if (input) {
-                input.indeterminate = searchQuery.trim()
-                  ? someFilteredSelected
-                  : someSelected;
+      <div className="mb-3 space-y-2 rounded-lg border border-gray-200 bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-sm font-medium text-gray-800">
+            <input
+              type="checkbox"
+              checked={searchQuery.trim() ? allFilteredSelected : allSelected}
+              ref={(input) => {
+                if (input) {
+                  input.indeterminate = searchQuery.trim()
+                    ? someFilteredSelected
+                    : someSelected;
+                }
+              }}
+              disabled={disabled || filteredEmployees.length === 0}
+              onChange={
+                searchQuery.trim() ? handleToggleAll : handleToggleAllEmployees
               }
-            }}
-            disabled={disabled || filteredEmployees.length === 0}
-            onChange={
-              searchQuery.trim() ? handleToggleAll : handleToggleAllEmployees
-            }
-            className="h-4 w-4 rounded border-gray-300 text-blue-600"
-          />
-          {searchQuery.trim() ? 'Select all shown' : 'Select all'}
-        </label>
-        <span className="text-xs text-gray-500">
-          {selectedNames.size} of {sortedEmployees.length} selected
-          {searchQuery.trim() &&
-            ` · ${filteredEmployees.length} shown`}
-        </span>
+              className="h-4 w-4 rounded border-gray-300 text-blue-600"
+            />
+            {searchQuery.trim() ? 'Select all shown' : 'Select all'}
+          </label>
+          <span className="text-xs text-gray-500">
+            {selectedNames.size} of {sortedEmployees.length} selected
+            {searchQuery.trim() &&
+              ` · ${filteredEmployees.length} shown`}
+          </span>
+        </div>
+
+        {sortedOfficeCategories.length > 0 && (
+          <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-gray-100 pt-2">
+            {sortedOfficeCategories.map((office) => {
+              const names = officeSelectableNames.get(office.id) ?? [];
+              const allOfficeSelected =
+                names.length > 0 &&
+                names.every((name) => selectedNames.has(name));
+              const someOfficeSelected =
+                names.some((name) => selectedNames.has(name)) &&
+                !allOfficeSelected;
+
+              return (
+                <label
+                  key={office.id}
+                  className="flex items-center gap-2 text-sm font-medium text-gray-800"
+                >
+                  <input
+                    type="checkbox"
+                    checked={allOfficeSelected}
+                    ref={(input) => {
+                      if (input) input.indeterminate = someOfficeSelected;
+                    }}
+                    disabled={disabled || names.length === 0}
+                    onChange={() => handleToggleOfficeCategory(office.id)}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                  />
+                  <span>
+                    {office.name}
+                    <span className="ml-1 font-normal text-gray-500">
+                      ({names.length}
+                      {office.members.length !== names.length
+                        ? ` of ${office.members.length}`
+                        : ''}{' '}
+                      in Manage Users)
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-white p-3">

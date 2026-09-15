@@ -1,5 +1,6 @@
 import type {
   EmployeeCategory,
+  OfficeCategory,
   ManagedUser,
   MentionUser,
   PivotData,
@@ -331,30 +332,48 @@ function isPersonalTravel(description: string): boolean {
 }
 
 /** IN-SHOP / office errands (pickup supplies, laptop) — miles not required. */
-function isShopOrOfficeErrand(description: string): boolean {
+function isShopOrOfficeErrand(
+  description: string,
+  offices: OfficeCategory[] = [],
+): boolean {
   const d = description.toLowerCase();
   if (/\bin[- ]?shop\b/i.test(d)) return true;
   if (/\bin[- ]?office\b/i.test(d) || /\bin[- ]?home\b/i.test(d)) return true;
 
+  const pickup =
+    /\b(?:pickup|pick\s*up|supplies?|laptop|computers?|mails?|checks?|packages?)\b/i.test(
+      d,
+    );
+
   // Went/go to company office or shop for supplies / equipment pickup
   if (
     /\b(?:went|go(?:ing)?|drove)\s+to\b.*\b(?:office|shop)\b/i.test(d) &&
-    /\b(?:pickup|pick\s*up|supplies?|laptop|computers?|mails?|checks?|packages?)\b/i.test(
-      d,
-    )
+    pickup
   ) {
     return true;
   }
 
-  if (
-    /\b(?:clovis|fresno)\s+(?:office|shop)\b/i.test(d) &&
-    /\b(?:pickup|pick\s*up|supplies?|laptop|computers?|mails?|checks?|packages?)\b/i.test(
-      d,
-    )
-  ) {
+  if (pickup && descriptionMentionsOfficeCategory(description, offices)) {
     return true;
   }
 
+  return false;
+}
+
+function descriptionMentionsOfficeCategory(
+  description: string,
+  offices: OfficeCategory[],
+): boolean {
+  const d = description.toLowerCase();
+  for (const loc of offices) {
+    const name = loc.name.trim().toLowerCase();
+    if (!name) continue;
+    if (d.includes(name)) return true;
+    const withoutEps = name.replace(/^eps(?:\/allumiax)?\s+/i, '').trim();
+    if (withoutEps && withoutEps !== name && d.includes(withoutEps)) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -457,7 +476,10 @@ function isProfessionalTravel(description: string): boolean {
   );
 }
 
-function isTravelOnSite(description: string): boolean {
+function isTravelOnSite(
+  description: string,
+  offices: OfficeCategory[] = [],
+): boolean {
   const d = description.toLowerCase().trim();
 
   if (d.includes('preparation for site visit')) return false;
@@ -469,7 +491,7 @@ function isTravelOnSite(description: string): boolean {
     return false;
   }
   if (isPersonalTravel(description)) return false;
-  if (isShopOrOfficeErrand(description)) return false;
+  if (isShopOrOfficeErrand(description, offices)) return false;
   if (isSiteReference(description) && !hasActualSiteTravel(description)) {
     return false;
   }
@@ -811,6 +833,7 @@ export function proposeHighlights(
   pivot: PivotData,
   managedUsers: ManagedUser[] = [],
   mentionUsers: MentionUser[] = [],
+  officeCategories: OfficeCategory[] = [],
 ): HighlightProposal[] {
   const categorySets = buildCategorySets(managedUsers);
   const proposals: HighlightProposal[] = [];
@@ -863,7 +886,8 @@ export function proposeHighlights(
         !internalAdminWork &&
         !isPlanningTravel(desc) &&
         !hasNamedDriver(desc, employeeFirstNames) &&
-        (isSiteSurveyTag(currentTag) || isTravelOnSite(desc)) &&
+        (isSiteSurveyTag(currentTag) ||
+          isTravelOnSite(desc, officeCategories)) &&
         !hasMiles(desc) &&
         !hasZeroMiles(desc);
       if (needsMiles) {

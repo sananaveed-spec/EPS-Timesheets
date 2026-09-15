@@ -52,9 +52,26 @@ export interface ManagedUser {
   id: string;
   name: string;
   category: EmployeeCategory;
+  /** Clockify workspace user id — source of truth for the display name. */
+  clockifyUserId?: string;
 }
 
 export interface MentionUser {
   id: string;
   name: string;
+  clockifyUserId?: string;
+}
+
+/** Clockify employee assigned to an EPS office or shop category. */
+export interface OfficeMember {
+  id: string;
+  name: string;
+  clockifyUserId?: string;
+}
+
+/** EPS office/shop category with its own member list (like Manage Users). */
+export interface OfficeCategory {
+  id: string;
+  name: string;
+  members: OfficeMember[];
 }

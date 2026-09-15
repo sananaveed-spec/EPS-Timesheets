@@ -34,14 +34,32 @@ export const DEFAULT_PART_TIME_HOURLY = [
 ] as const;
 
 export function normalizeEmployeeName(employeeName: string): string {
-  return employeeName.replace(/\s*\([^)]*\)\s*$/, '').trim();
+  return employeeName
+    .normalize('NFKC')
+    .replace(/[\u00A0\u2000-\u200B\u202F\uFEFF]/g, ' ')
+    .replace(/\s*\([^)]*\)\s*$/g, '')
+    .replace(/\s*\[[^\]]*\]\s*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Stable compare key so "Julian Sanchez" matches "Julian Sanchez (48)". */
+export function employeeNameKey(employeeName: string): string {
+  return normalizeEmployeeName(employeeName)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ');
 }
 
 export function sameEmployeeName(a: string, b: string): boolean {
-  return (
-    normalizeEmployeeName(a).toLowerCase() ===
-    normalizeEmployeeName(b).toLowerCase()
-  );
+  const left = normalizeEmployeeName(a).toLowerCase();
+  const right = normalizeEmployeeName(b).toLowerCase();
+  if (left === right) return true;
+  const keyA = employeeNameKey(a);
+  const keyB = employeeNameKey(b);
+  return keyA.length > 0 && keyA === keyB;
 }
 
 function defaultUserId(name: string): string {
@@ -87,16 +105,22 @@ export function mergeDefaultManagedUsers(
 
 export function alignUsersWithClockify(
   users: ManagedUser[],
-  clockifyUsers: Array<{ name: string }>,
+  clockifyUsers: Array<{ id: string; name: string }>,
 ): ManagedUser[] {
   let changed = false;
   const nextUsers = users.map((user) => {
-    const match = clockifyUsers.find((employee) =>
-      sameEmployeeName(employee.name, user.name),
-    );
-    if (!match || match.name === user.name) return user;
+    const match =
+      (user.clockifyUserId &&
+        clockifyUsers.find((employee) => employee.id === user.clockifyUserId)) ||
+      clockifyUsers.find((employee) =>
+        sameEmployeeName(employee.name, user.name),
+      );
+    if (!match) return user;
+    if (match.name === user.name && match.id === user.clockifyUserId) {
+      return user;
+    }
     changed = true;
-    return { ...user, name: match.name };
+    return { ...user, name: match.name, clockifyUserId: match.id };
   });
   return changed ? nextUsers : users;
 }
