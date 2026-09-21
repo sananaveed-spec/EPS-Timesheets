@@ -49,14 +49,17 @@ export type EmployeeCategory =
   | 'part-time-hourly';
 
 /** Optional office affiliation on a managed user. */
-export type OfficeCategory = 'eps-clovis-office' | 'eps-fresno-shop';
+export type OfficeCategory =
+  | 'eps-employees'
+  | 'eps-clovis-office'
+  | 'eps-fresno-shop';
 
 export interface ManagedUser {
   id: string;
   name: string;
   /** Employment type — required. */
   category: EmployeeCategory;
-  /** EPS Clovis Office / EPS Fresno Shop — optional. */
+  /** EPS Employees / Clovis / Fresno — optional. */
   office?: OfficeCategory | null;
   /** Clockify workspace user id — source of truth for the display name. */
   clockifyUserId?: string;

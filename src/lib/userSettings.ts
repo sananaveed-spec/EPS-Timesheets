@@ -1,7 +1,7 @@
 import type { ManagedUser, MentionUser, OfficeCategory } from '../types';
 import { sameEmployeeName } from './employeeCategories';
 import {
-  isOfficeCategory,
+  normalizeOfficeCategory,
   officeCategoryFromLegacyName,
 } from './officeCategories';
 
@@ -41,9 +41,7 @@ function normalizeManagedUser(raw: ManagedUser): ManagedUser | null {
   const office =
     raw.office === null
       ? null
-      : isOfficeCategory(raw.office)
-        ? raw.office
-        : undefined;
+      : normalizeOfficeCategory(raw.office) ?? undefined;
 
   return {
     id: raw.id,
@@ -140,20 +138,25 @@ export function saveManagedUsers(users: ManagedUser[]): void {
 
 export function loadMentionUsers(): MentionUser[] {
   return readStoredList<MentionUser>(MENTION_STORAGE_KEY)
-    .filter(
-      (user) =>
-        typeof user?.id === 'string' &&
-        typeof user?.name === 'string' &&
-        isOfficeCategory(user.office),
-    )
-    .map((user) => ({
-      id: user.id,
-      name: user.name,
-      office: user.office,
-      ...(typeof user.clockifyUserId === 'string'
-        ? { clockifyUserId: user.clockifyUserId }
-        : {}),
-    }));
+    .map((user) => {
+      const office = normalizeOfficeCategory(user?.office);
+      if (
+        typeof user?.id !== 'string' ||
+        typeof user?.name !== 'string' ||
+        !office
+      ) {
+        return null;
+      }
+      return {
+        id: user.id,
+        name: user.name,
+        office,
+        ...(typeof user.clockifyUserId === 'string'
+          ? { clockifyUserId: user.clockifyUserId }
+          : {}),
+      } satisfies MentionUser;
+    })
+    .filter((user): user is MentionUser => user != null);
 }
 
 export function saveMentionUsers(users: MentionUser[]): void {

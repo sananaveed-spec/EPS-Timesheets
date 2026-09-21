@@ -203,8 +203,15 @@ export function UserManager({
     [users],
   );
 
-  const greetingClovis = mentionPreview(mentionUsers, 'eps-clovis-office');
-  const greetingFresno = mentionPreview(mentionUsers, 'eps-fresno-shop');
+  const officeGreetings = (
+    Object.keys(OFFICE_CATEGORY_LABELS) as OfficeCategory[]
+  )
+    .map((office) => ({
+      office,
+      label: OFFICE_CATEGORY_LABELS[office],
+      greeting: mentionPreview(mentionUsers, office),
+    }))
+    .filter((row) => row.greeting);
 
   const toggleId = useCallback(
     (id: string, setter: Dispatch<SetStateAction<Set<string>>>) => {
@@ -281,7 +288,7 @@ export function UserManager({
             <h2 className="text-lg font-semibold text-gray-900">Manage Users</h2>
             <p className="mt-1 text-sm text-gray-600">
               Pick Clockify employees, set employment category (required), and
-              optionally assign EPS Clovis Office or EPS Fresno Shop.
+              optionally assign EPS Employees, EPS Clovis Office, or EPS Fresno Shop.
             </p>
           </div>
           <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
@@ -538,21 +545,18 @@ export function UserManager({
         </div>
 
         <div className="mt-3 space-y-2">
-          {greetingClovis ? (
-            <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
-              EPS Clovis Office comments:{' '}
-              <span className="font-medium text-gray-900">{greetingClovis}</span>
+          {officeGreetings.map(({ office, label, greeting }) => (
+            <p
+              key={office}
+              className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700"
+            >
+              {label} comments:{' '}
+              <span className="font-medium text-gray-900">{greeting}</span>
             </p>
-          ) : null}
-          {greetingFresno ? (
-            <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
-              EPS Fresno Shop comments:{' '}
-              <span className="font-medium text-gray-900">{greetingFresno}</span>
-            </p>
-          ) : null}
-          {!greetingClovis && !greetingFresno ? (
+          ))}
+          {officeGreetings.length === 0 ? (
             <p className="text-sm text-gray-500">
-              Add mention users for Clovis and/or Fresno to prefix comments.
+              Add mention users for an office to prefix comments.
             </p>
           ) : null}
         </div>
