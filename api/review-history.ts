@@ -29,8 +29,88 @@ function getRedis(): Redis | null {
   return new Redis({ url, token });
 }
 
+function normalizeText(text: string): string {
+  return text
+    .toString()
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function periodIndexKey(periodStart: string, periodEnd: string): string {
-  return `${INDEX_PREFIX}${periodStart}::${periodEnd}`;
+  return `${INDEX_PREFIX}${normalizeText(periodStart)}::${normalizeText(periodEnd)}`;
+}
+
+function entryKey(historyId: string): string {
+  return `${ENTRY_PREFIX}${historyId}`;
+}
+
+function sameRow(
+  a: Pick<
+    ReviewHistoryEntry,
+    'matchedTextNorm' | 'projectLabel' | 'employeeName'
+  >,
+  b: Pick<
+    ReviewHistoryEntry,
+    'matchedTextNorm' | 'projectLabel' | 'employeeName'
+  >,
+): boolean {
+  return (
+    normalizeText(a.matchedTextNorm) === normalizeText(b.matchedTextNorm) &&
+    normalizeText(a.projectLabel) === normalizeText(b.projectLabel) &&
+    normalizeText(a.employeeName) === normalizeText(b.employeeName)
+  );
+}
+
+async function loadPeriodEntries(
+  redis: Redis,
+  periodStart: string,
+  periodEnd: string,
+): Promise<ReviewHistoryEntry[]> {
+  const indexKey = periodIndexKey(periodStart, periodEnd);
+  const historyIds = await redis.smembers(indexKey);
+  if (!historyIds || historyIds.length === 0) return [];
+
+  const values = await Promise.all(
+    historyIds.map(async (id) => {
+      const entry = await redis.get<ReviewHistoryEntry>(entryKey(id));
+      return { id, entry: entry ?? null };
+    }),
+  );
+
+  const staleIds = values.filter((v) => v.entry == null).map((v) => v.id);
+  if (staleIds.length > 0) {
+    await redis.srem(indexKey, ...staleIds);
+  }
+
+  return values
+    .map((v) => v.entry)
+    .filter((v): v is ReviewHistoryEntry => v !== null)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+async function deleteRowDuplicates(
+  redis: Redis,
+  periodStart: string,
+  periodEnd: string,
+  row: Pick<
+    ReviewHistoryEntry,
+    'matchedTextNorm' | 'projectLabel' | 'employeeName'
+  >,
+  keepHistoryId?: string,
+): Promise<number> {
+  const entries = await loadPeriodEntries(redis, periodStart, periodEnd);
+  const indexKey = periodIndexKey(periodStart, periodEnd);
+  let deleted = 0;
+  for (const entry of entries) {
+    if (keepHistoryId && entry.historyId === keepHistoryId) continue;
+    if (!sameRow(entry, row)) continue;
+    await redis.del(entryKey(entry.historyId));
+    await redis.srem(indexKey, entry.historyId);
+    deleted += 1;
+  }
+  return deleted;
 }
 
 function parseBody(req: VercelRequest): unknown {
@@ -69,26 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return;
       }
 
-      const indexKey = periodIndexKey(periodStart, periodEnd);
-      const historyIds = await redis.smembers(indexKey);
-      if (!historyIds || historyIds.length === 0) {
-        res.status(200).json({ entries: [] });
-        return;
-      }
-
-      const values = await Promise.all(
-        historyIds.map(async (id) => {
-          const entry = await redis.get<ReviewHistoryEntry>(
-            `${ENTRY_PREFIX}${id}`,
-          );
-          return entry ?? null;
-        }),
-      );
-
-      const entries = values
-        .filter((v): v is ReviewHistoryEntry => v !== null)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-
+      const entries = await loadPeriodEntries(redis, periodStart, periodEnd);
       res.status(200).json({ entries });
       return;
     }
@@ -101,12 +162,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const historyId = String(body.historyId ?? '').trim();
-      const periodStart = String(body.periodStart ?? '').trim();
-      const periodEnd = String(body.periodEnd ?? '').trim();
+      const periodStart = normalizeText(String(body.periodStart ?? ''));
+      const periodEnd = normalizeText(String(body.periodEnd ?? ''));
       const ruleId = String(body.ruleId ?? '').trim();
-      const matchedTextNorm = String(body.matchedTextNorm ?? '').trim();
-      const projectLabel = String(body.projectLabel ?? '').trim();
-      const employeeName = String(body.employeeName ?? '').trim();
+      const matchedTextNorm = normalizeText(String(body.matchedTextNorm ?? ''));
+      const projectLabel = normalizeText(String(body.projectLabel ?? ''));
+      const employeeName = normalizeText(String(body.employeeName ?? ''));
       const status = String(body.status ?? '').trim();
       const triggerText = String(body.triggerText ?? '').trim();
       const comment = String(body.comment ?? '').trim();
@@ -146,7 +207,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updatedAt,
       };
 
-      await redis.set(`${ENTRY_PREFIX}${historyId}`, entry);
+      // Drop older ruleId-keyed duplicates for the same highlight row.
+      await deleteRowDuplicates(redis, periodStart, periodEnd, entry, historyId);
+
+      await redis.set(entryKey(historyId), entry);
       await redis.sadd(periodIndexKey(periodStart, periodEnd), historyId);
 
       res.status(200).json({ ok: true });
@@ -159,9 +223,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : '';
       const periodStart = String(req.query['periodStart'] ?? '').trim();
       const periodEnd = String(req.query['periodEnd'] ?? '').trim();
+      const matchedTextNorm = String(req.query['matchedTextNorm'] ?? '').trim();
+      const projectLabel = String(req.query['projectLabel'] ?? '').trim();
+      const employeeName = String(req.query['employeeName'] ?? '').trim();
+
+      if (periodStart && periodEnd && matchedTextNorm && projectLabel && employeeName) {
+        const deleted = await deleteRowDuplicates(
+          redis,
+          periodStart,
+          periodEnd,
+          { matchedTextNorm, projectLabel, employeeName },
+        );
+        if (historyId) {
+          await redis.del(entryKey(historyId));
+          await redis.srem(periodIndexKey(periodStart, periodEnd), historyId);
+        }
+        res.status(200).json({ ok: true, deletedCount: deleted });
+        return;
+      }
 
       if (historyId) {
-        await redis.del(`${ENTRY_PREFIX}${historyId}`);
+        await redis.del(entryKey(historyId));
         if (periodStart && periodEnd) {
           await redis.srem(periodIndexKey(periodStart, periodEnd), historyId);
         }
@@ -169,7 +251,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return;
       }
 
-      res.status(400).json({ error: 'historyId is required to delete.' });
+      res.status(400).json({
+        error:
+          'Provide historyId, or periodStart+periodEnd+matchedTextNorm+projectLabel+employeeName.',
+      });
       return;
     }
 

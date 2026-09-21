@@ -78,10 +78,14 @@ export async function clearReviewHistoryEntry(args: {
     args.periodStart,
     args.periodEnd,
   );
+  // Clear by row fields so older ruleId-based historyIds are removed too.
   const params = new URLSearchParams({
     historyId: keyParts.historyId,
     periodStart: keyParts.periodStart,
     periodEnd: keyParts.periodEnd,
+    matchedTextNorm: keyParts.matchedTextNorm,
+    projectLabel: keyParts.projectLabel,
+    employeeName: keyParts.employeeName,
   });
   const response = await fetch(`${endpointUrl()}?${params.toString()}`, {
     method: 'DELETE',

@@ -54,7 +54,10 @@ export type ReviewHistoryKeyParts = {
   employeeName: string;
 };
 
-/** Stable id for a highlight within a report period (ignores edited trigger text). */
+/** Stable id for a highlight row within a report period.
+ *  Intentionally ignores ruleId and edited trigger/comment so Accept/Delete
+ *  still restore after highlight-rule changes or comment regenerations.
+ */
 export function makeReviewHistoryKeyParts(
   proposal: Pick<
     HighlightProposal,
@@ -72,7 +75,6 @@ export function makeReviewHistoryKeyParts(
   const raw = [
     periodStartNorm,
     periodEndNorm,
-    proposal.ruleId,
     matchedTextNorm,
     projectLabel,
     employeeName,
@@ -89,33 +91,52 @@ export function makeReviewHistoryKeyParts(
   };
 }
 
+function rowHistoryKey(
+  matchedTextNorm: string,
+  projectLabel: string,
+  employeeName: string,
+): string {
+  return `${matchedTextNorm}::${projectLabel}::${employeeName}`;
+}
+
 export function applyReviewHistory(
   proposals: HighlightProposal[],
   entries: ReviewHistoryEntry[],
 ): HighlightProposal[] {
   if (entries.length === 0) return proposals;
 
-  const byKey = new Map(
-    entries.map((e) => [
-      `${e.ruleId}::${e.matchedTextNorm}::${e.projectLabel}::${e.employeeName}`,
-      e,
-    ]),
+  // Newest decision wins when older ruleId-based duplicates exist.
+  const sorted = [...entries].sort((a, b) =>
+    a.updatedAt.localeCompare(b.updatedAt),
   );
+  const byRow = new Map<string, ReviewHistoryEntry>();
+  for (const entry of sorted) {
+    byRow.set(
+      rowHistoryKey(
+        entry.matchedTextNorm,
+        entry.projectLabel,
+        entry.employeeName,
+      ),
+      entry,
+    );
+  }
 
   return proposals.map((p) => {
-    const key = [
-      p.ruleId,
-      normalizeText(p.matchedText),
-      normalizeText(p.projectLabel),
-      normalizeText(p.employeeName),
-    ].join('::');
-    const saved = byKey.get(key);
+    const saved = byRow.get(
+      rowHistoryKey(
+        normalizeText(p.matchedText),
+        normalizeText(p.projectLabel),
+        normalizeText(p.employeeName),
+      ),
+    );
     if (!saved) return p;
     return {
       ...p,
       status: saved.status,
-      comment: saved.comment || p.comment,
-      triggerText: saved.triggerText || p.triggerText,
+      comment: saved.comment.trim() ? saved.comment : p.comment,
+      triggerText: saved.triggerText.trim()
+        ? saved.triggerText
+        : p.triggerText,
     };
   });
 }

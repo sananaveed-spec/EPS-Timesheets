@@ -62,6 +62,7 @@ function AppContent() {
     () => loadMentionUsers(),
   );
   const [reviewHistory, setReviewHistory] = useState<ReviewHistoryEntry[]>([]);
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     setManagedUsers(loadManagedUsers());
@@ -81,6 +82,7 @@ function AppContent() {
       setPivot(null);
       setHighlightProposals([]);
       setReviewHistory([]);
+      setHistoryLoadError(null);
       setProposalsLoading(false);
       setError(null);
       setLoading(true);
@@ -104,9 +106,15 @@ function AppContent() {
               try {
                 history = await fetchReviewHistory(periodStart, periodEnd);
                 setReviewHistory(history);
-              } catch {
+                setHistoryLoadError(null);
+              } catch (e) {
                 history = [];
                 setReviewHistory([]);
+                setHistoryLoadError(
+                  e instanceof Error
+                    ? e.message
+                    : 'Failed to load previous review decisions.',
+                );
               }
 
               const proposals = proposeHighlights(
@@ -360,6 +368,13 @@ function AppContent() {
             {error && (
               <div className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
                 {error}
+              </div>
+            )}
+
+            {historyLoadError && (
+              <div className="mb-6 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                Previous Accept/Delete comments could not be loaded:{' '}
+                {historyLoadError}
               </div>
             )}
 
