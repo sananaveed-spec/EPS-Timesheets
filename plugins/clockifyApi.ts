@@ -35,8 +35,49 @@ function sendJson(
 }
 
 function createHandler(env: Record<string, string>): Connect.NextHandleFunction {
+  const reviewHistoryUpstream =
+    env.VITE_FEEDBACK_API_URL?.trim().replace(/\/$/, '') ||
+    'https://eps-timesheets.vercel.app/api';
+
   return async (req, res, next) => {
-    const url = req.url?.split('?')[0];
+    const rawUrl = req.url ?? '';
+    const url = rawUrl.split('?')[0];
+
+    if (url === '/api/review-history') {
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
+      try {
+        const query = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
+        const upstreamUrl = `${reviewHistoryUpstream}/review-history${query}`;
+        const init: RequestInit = {
+          method: req.method,
+          headers: { 'Content-Type': 'application/json' },
+        };
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req);
+          init.body = JSON.stringify(body ?? {});
+        }
+        const upstream = await fetch(upstreamUrl, init);
+        const text = await upstream.text();
+        res.statusCode = upstream.status;
+        res.setHeader(
+          'Content-Type',
+          upstream.headers.get('content-type') || 'application/json',
+        );
+        res.end(text);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Review history proxy failed.';
+        sendJson(res, 502, { error: message });
+      }
+      return;
+    }
 
     if (url === '/api/clockify/users') {
       if (req.method === 'OPTIONS') {

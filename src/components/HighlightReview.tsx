@@ -5,6 +5,7 @@ import {
   clearReviewHistoryEntry,
   saveReviewHistoryEntry,
 } from '../lib/reviewHistoryClient';
+import type { ReviewHistoryEntry } from '../lib/reviewHistoryFingerprint';
 
 interface HighlightReviewProps {
   proposals: HighlightProposal[];
@@ -14,6 +15,8 @@ interface HighlightReviewProps {
   downloading?: boolean;
   periodStart?: string;
   periodEnd?: string;
+  onHistoryPersisted?: (entry: ReviewHistoryEntry) => void;
+  onHistoryCleared?: (proposal: HighlightProposal) => void;
 }
 
 function statusCounts(items: HighlightProposal[]) {
@@ -32,6 +35,8 @@ export function HighlightReview({
   downloading = false,
   periodStart = '',
   periodEnd = '',
+  onHistoryPersisted,
+  onHistoryCleared,
 }: HighlightReviewProps) {
   const groups = useMemo(() => groupProposalsByEmployee(proposals), [proposals]);
   const [fileIndex, setFileIndex] = useState(0);
@@ -56,13 +61,16 @@ export function HighlightReview({
     proposal: HighlightProposal,
     status: 'accepted' | 'deleted',
   ) => {
-    if (!periodStart || !periodEnd) return;
-    await saveReviewHistoryEntry({
+    if (!periodStart || !periodEnd) {
+      throw new Error('Missing report period — cannot save review history.');
+    }
+    const entry = await saveReviewHistoryEntry({
       proposal: { ...proposal, status },
       periodStart,
       periodEnd,
       status,
     });
+    onHistoryPersisted?.(entry);
   };
 
   const updateProposal = (
@@ -75,9 +83,10 @@ export function HighlightReview({
   };
 
   const acceptProposal = async (proposal: HighlightProposal) => {
+    const accepted = { ...proposal, status: 'accepted' as const };
     updateProposal(proposal.id, { status: 'accepted' });
     try {
-      await persistDecision(proposal, 'accepted');
+      await persistDecision(accepted, 'accepted');
     } catch (e) {
       setHistorySaveError(
         e instanceof Error ? e.message : 'Failed to save accept history.',
@@ -94,6 +103,7 @@ export function HighlightReview({
         periodStart,
         periodEnd,
       });
+      onHistoryCleared?.(proposal);
     } catch (e) {
       setHistorySaveError(
         e instanceof Error ? e.message : 'Failed to restore highlight.',
@@ -113,15 +123,20 @@ export function HighlightReview({
       ),
     );
     void Promise.all(
-      toAccept.map((p) => persistDecision(p, 'accepted').catch(() => undefined)),
+      toAccept.map((p) =>
+        persistDecision({ ...p, status: 'accepted' }, 'accepted').catch(
+          () => undefined,
+        ),
+      ),
     );
   };
 
   const deleteProposal = async (proposal: HighlightProposal) => {
+    const deleted = { ...proposal, status: 'deleted' as const };
     updateProposal(proposal.id, { status: 'deleted' });
     setRejectingId(null);
     try {
-      await persistDecision(proposal, 'deleted');
+      await persistDecision(deleted, 'deleted');
     } catch (e) {
       setHistorySaveError(
         e instanceof Error ? e.message : 'Failed to save delete history.',
@@ -143,7 +158,9 @@ export function HighlightReview({
       );
       await Promise.all(
         toDelete.map((p) =>
-          persistDecision(p, 'deleted').catch(() => undefined),
+          persistDecision({ ...p, status: 'deleted' }, 'deleted').catch(
+            () => undefined,
+          ),
         ),
       );
     } finally {

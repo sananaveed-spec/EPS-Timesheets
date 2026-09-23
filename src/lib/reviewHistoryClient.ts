@@ -22,16 +22,20 @@ export async function fetchReviewHistory(
   const end = periodEnd.toString().normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
   const params = new URLSearchParams({ periodStart: start, periodEnd: end });
   const response = await fetch(`${endpointUrl()}?${params.toString()}`);
+  const payload = (await response.json().catch(() => null)) as
+    | { entries?: ReviewHistoryEntry[]; error?: string }
+    | null;
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as
-      | { error?: string }
-      | null;
     throw new Error(
       payload?.error || `Review history fetch failed (${response.status}).`,
     );
   }
-  const payload = (await response.json()) as { entries?: ReviewHistoryEntry[] };
-  return Array.isArray(payload.entries) ? payload.entries : [];
+  if (!payload || !Array.isArray(payload.entries)) {
+    throw new Error(
+      'Review history fetch returned an invalid response (is /api/review-history available?).',
+    );
+  }
+  return payload.entries;
 }
 
 export async function saveReviewHistoryEntry(args: {
@@ -39,33 +43,36 @@ export async function saveReviewHistoryEntry(args: {
   periodStart: string;
   periodEnd: string;
   status: ReviewHistoryStatus;
-}): Promise<void> {
+}): Promise<ReviewHistoryEntry> {
   const keyParts = makeReviewHistoryKeyParts(
     args.proposal,
     args.periodStart,
     args.periodEnd,
   );
 
+  const entry: ReviewHistoryEntry = {
+    ...keyParts,
+    status: args.status,
+    triggerText: args.proposal.triggerText || args.proposal.matchedText,
+    comment: args.proposal.comment,
+    updatedAt: new Date().toISOString(),
+  };
+
   const response = await fetch(endpointUrl(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ...keyParts,
-      status: args.status,
-      triggerText: args.proposal.triggerText || args.proposal.matchedText,
-      comment: args.proposal.comment,
-      updatedAt: new Date().toISOString(),
-    }),
+    body: JSON.stringify(entry),
   });
 
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as
-      | { error?: string }
-      | null;
+  const payload = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string }
+    | null;
+  if (!response.ok || !payload?.ok) {
     throw new Error(
       payload?.error || `Review history save failed (${response.status}).`,
     );
   }
+  return entry;
 }
 
 export async function clearReviewHistoryEntry(args: {
@@ -90,10 +97,10 @@ export async function clearReviewHistoryEntry(args: {
   const response = await fetch(`${endpointUrl()}?${params.toString()}`, {
     method: 'DELETE',
   });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as
-      | { error?: string }
-      | null;
+  const payload = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string }
+    | null;
+  if (!response.ok || !payload?.ok) {
     throw new Error(
       payload?.error || `Review history clear failed (${response.status}).`,
     );

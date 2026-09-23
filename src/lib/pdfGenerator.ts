@@ -298,13 +298,17 @@ function isSiteSurveyTag(tag: string): boolean {
 
 interface ReportCard {
   totalHours: number;
+  /** Part-time: reported − sick − holiday. Same as totalHours for others. */
+  totalWorkHours: number;
   sickHours: number;
+  holidayHours: number;
   ptoHours: number;
   accruedPTOApplies: boolean;
   accruedPTOTime: AccruedPTOEntry[];
   timesheetNeedsFilled: TimesheetNeedsFilledEntry[];
   timesheetRuleApplies: boolean;
   sickTime: CompTimeEntry[];
+  holidayTime: CompTimeEntry[];
   ptoTime: CompTimeEntry[];
   compTime: CompTimeEntry[];
   compTimeAccrued: CompTimeEntry[];
@@ -385,10 +389,12 @@ function computeReportCard(
 ): ReportCard {
   let totalHours = 0;
   let sickHours = 0;
+  let holidayHours = 0;
   let ptoHours = 0;
   const timesheetNeedsFilled: TimesheetNeedsFilledEntry[] = [];
   const reviewNeeded: ReviewEntry[] = [];
   const sickByDate: Record<string, number> = {};
+  const holidayByDate: Record<string, number> = {};
   const ptoByDate: Record<string, number> = {};
   const accruedPTOEligibleHoursByDate: Record<string, number> = {};
   const reportedHoursByDate: Record<string, number> = {};
@@ -522,6 +528,13 @@ function computeReportCard(
           const hrs = row.dateValues[d] ?? 0;
           if (hrs > 0) sickByDate[d] = (sickByDate[d] ?? 0) + hrs;
         }
+      } else if (isHolidayLeaveContext(currentProjectLabel)) {
+        // EPS Admin: Holiday Time (and similar Holiday project categories)
+        holidayHours += row.grandTotal;
+        for (const d of dates) {
+          const hrs = row.dateValues[d] ?? 0;
+          if (hrs > 0) holidayByDate[d] = (holidayByDate[d] ?? 0) + hrs;
+        }
       } else if (
         !isPartTimeHourly(employeeName, categorySets) &&
         (
@@ -552,11 +565,21 @@ function computeReportCard(
     .filter((d) => (sickByDate[d] ?? 0) > 0)
     .map((d) => ({ date: d, hours: sickByDate[d]! }));
 
+  const holidayTime: CompTimeEntry[] = dates
+    .filter((d) => (holidayByDate[d] ?? 0) > 0)
+    .map((d) => ({ date: d, hours: holidayByDate[d]! }));
+
   const ptoTime: CompTimeEntry[] = isPartTimeHourly(employeeName, categorySets)
     ? []
     : dates
         .filter((d) => (ptoByDate[d] ?? 0) > 0)
         .map((d) => ({ date: d, hours: ptoByDate[d]! }));
+
+  const totalWorkHours = isPartTimeHourly(employeeName, categorySets)
+    ? roundHoursForReport(
+        Math.max(0, totalHours - sickHours - holidayHours),
+      )
+    : totalHours;
 
   const accruedPTOTime: AccruedPTOEntry[] = accruedPTOApplies
     ? dates.map((d) => {
@@ -604,7 +627,26 @@ function computeReportCard(
   const timesheetRuleApplies = isFullTimeEmployee(employeeName, categorySets);
   const compTimeApplies = isFullTimeSalaried(employeeName, categorySets);
   const overtimeApplies = !isFullTimeSalaried(employeeName, categorySets);
-  return { totalHours, sickHours, ptoHours, accruedPTOApplies, accruedPTOTime, timesheetNeedsFilled, timesheetRuleApplies, sickTime, ptoTime, compTime, compTimeAccrued, compTimeApplies, overtimeTime, overtimeApplies, reviewNeeded };
+  return {
+    totalHours,
+    totalWorkHours,
+    sickHours,
+    holidayHours,
+    ptoHours,
+    accruedPTOApplies,
+    accruedPTOTime,
+    timesheetNeedsFilled,
+    timesheetRuleApplies,
+    sickTime,
+    holidayTime,
+    ptoTime,
+    compTime,
+    compTimeAccrued,
+    compTimeApplies,
+    overtimeTime,
+    overtimeApplies,
+    reviewNeeded,
+  };
 }
 
 async function loadLogo(): Promise<{
@@ -730,14 +772,23 @@ function drawReportCardPage(
 
   const tableData: [string, string][] = [['Time period', timePeriodValue]];
   if (isPartTimeHourly(employeeName, categorySets)) {
-    tableData.push(['Total hours', formatHours(reportCard.totalHours)]);
+    tableData.push([
+      'Total reported hours',
+      formatHours(reportCard.totalHours),
+    ]);
+    tableData.push([
+      'Total work hours',
+      formatHours(reportCard.totalWorkHours),
+    ]);
+    tableData.push(['Sick Time', formatHours(reportCard.sickHours)]);
+    tableData.push(['Holiday Time', formatHours(reportCard.holidayHours)]);
   }
   if (reportCard.timesheetRuleApplies) {
     tableData.push(['Outstanding Clockify Entries', timesheetSummary]);
   }
   tableData.push(['Outstanding miles entries', reviewSummary]);
-  tableData.push(['Sick Time', formatHours(reportCard.sickHours)]);
   if (!isPartTimeHourly(employeeName, categorySets)) {
+    tableData.push(['Sick Time', formatHours(reportCard.sickHours)]);
     tableData.push(['PTO Time', formatHours(reportCard.ptoHours)]);
   }
   if (reportCard.accruedPTOApplies) {
@@ -968,6 +1019,13 @@ function drawReportCardPage(
   }
 
   drawDateHoursTable('Sick Time', reportCard.sickTime, 'No data found for sick time');
+  if (isPartTimeHourly(employeeName, categorySets)) {
+    drawDateHoursTable(
+      'Holiday Time',
+      reportCard.holidayTime,
+      'No data found for holiday time',
+    );
+  }
   if (!isPartTimeHourly(employeeName, categorySets)) {
     drawDateHoursTable('PTO Time', reportCard.ptoTime, 'No data found for PTO time');
   }

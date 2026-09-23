@@ -28,6 +28,9 @@ import {
 import { fetchReviewHistory } from './lib/reviewHistoryClient';
 import {
   applyReviewHistory,
+  mergeProposalsWithSessionAndHistory,
+  removeReviewHistoryRow,
+  upsertReviewHistoryEntry,
   type ReviewHistoryEntry,
 } from './lib/reviewHistoryFingerprint';
 import type {
@@ -95,11 +98,13 @@ function AppContent() {
               startDate,
               endDate,
             });
+            // Block the review UI until history is applied so Accept/Delete
+            // cannot overwrite saved edits with freshly generated defaults.
+            setProposalsLoading(true);
             setPivot(nextPivot);
             setSourceLabel(result.label);
 
             void (async () => {
-              setProposalsLoading(true);
               const periodStart = nextPivot.periodStart || startDate;
               const periodEnd = nextPivot.periodEnd || endDate;
               let history: ReviewHistoryEntry[] = [];
@@ -286,34 +291,23 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (!pivot) return;
-    setHighlightProposals((current) => {
-      const next = proposeHighlights(pivot, managedUsers, mentionUsers);
-      const prevById = new Map(current.map((p) => [p.id, p]));
+    if (!pivot || proposalsLoading) return;
+    setHighlightProposals((current) =>
+      mergeProposalsWithSessionAndHistory(
+        proposeHighlights(pivot, managedUsers, mentionUsers),
+        current,
+        reviewHistory,
+      ),
+    );
+  }, [managedUsers, mentionUsers, pivot, reviewHistory, proposalsLoading]);
 
-      const merged = next.map((p) => {
-        const prev = prevById.get(p.id);
-        if (!prev) return p;
-        return {
-          ...p,
-          status: prev.status,
-          comment:
-            prev.status === 'accepted' || prev.status === 'deleted'
-              ? prev.comment
-              : p.comment,
-          triggerText:
-            prev.status === 'accepted' || prev.status === 'deleted'
-              ? prev.triggerText
-              : p.triggerText,
-        };
-      });
+  const handleHistoryPersisted = useCallback((entry: ReviewHistoryEntry) => {
+    setReviewHistory((current) => upsertReviewHistoryEntry(current, entry));
+  }, []);
 
-      return merged.map((p) => {
-        if (p.status !== 'pending') return p;
-        return applyReviewHistory([p], reviewHistory)[0] ?? p;
-      });
-    });
-  }, [managedUsers, mentionUsers, pivot, reviewHistory]);
+  const handleHistoryCleared = useCallback((proposal: HighlightProposal) => {
+    setReviewHistory((current) => removeReviewHistoryRow(current, proposal));
+  }, []);
 
   const periodStart = pivot?.periodStart ?? '';
   const periodEnd = pivot?.periodEnd ?? '';
@@ -412,6 +406,8 @@ function AppContent() {
                     onChange={setHighlightProposals}
                     periodStart={periodStart}
                     periodEnd={periodEnd}
+                    onHistoryPersisted={handleHistoryPersisted}
+                    onHistoryCleared={handleHistoryCleared}
                     onDownload={() => {
                       void handleDownloadZip();
                     }}

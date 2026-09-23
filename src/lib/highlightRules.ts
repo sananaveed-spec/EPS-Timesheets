@@ -637,6 +637,7 @@ function makeId(
   matchedText: string,
   projectLabel: string,
 ): string {
+  // Do not include edited triggerText — id must stay stable across Accept/edits.
   return `${employeeName}::${ruleId}::${projectLabel}::${matchedText}`.slice(0, 240);
 }
 
@@ -650,7 +651,7 @@ function pushUnique(
     makeId(
       proposal.employeeName,
       proposal.ruleId,
-      `${proposal.triggerText}::${proposal.matchedText}`,
+      proposal.matchedText,
       proposal.projectLabel,
     );
   if (seen.has(id)) return;
@@ -719,7 +720,7 @@ function mergeProposalsByRow(
         id: makeId(
           primary.employeeName,
           'future_billable',
-          `${trigger}::${primary.matchedText}`,
+          primary.matchedText,
           primary.projectLabel,
         ),
         ruleId: 'future_billable',
@@ -756,7 +757,7 @@ function mergeProposalsByRow(
       id: makeId(
         primary.employeeName,
         primary.ruleId,
-        `combined::${triggerText}::${primary.matchedText}`,
+        primary.matchedText,
         primary.projectLabel,
       ),
       ruleLabel: labels.length === 1 ? labels[0]! : labels.join(' · '),

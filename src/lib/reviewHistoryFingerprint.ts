@@ -99,6 +99,28 @@ function rowHistoryKey(
   return `${matchedTextNorm}::${projectLabel}::${employeeName}`;
 }
 
+/** Stable row identity for a highlight (ignores ruleId / edited trigger). */
+export function proposalRowKey(
+  proposal: Pick<
+    HighlightProposal,
+    'matchedText' | 'projectLabel' | 'employeeName'
+  >,
+): string {
+  return rowHistoryKey(
+    normalizeText(proposal.matchedText),
+    normalizeText(proposal.projectLabel),
+    normalizeText(proposal.employeeName),
+  );
+}
+
+export function entryRowKey(entry: ReviewHistoryEntry): string {
+  return rowHistoryKey(
+    normalizeText(entry.matchedTextNorm),
+    normalizeText(entry.projectLabel),
+    normalizeText(entry.employeeName),
+  );
+}
+
 export function applyReviewHistory(
   proposals: HighlightProposal[],
   entries: ReviewHistoryEntry[],
@@ -111,24 +133,11 @@ export function applyReviewHistory(
   );
   const byRow = new Map<string, ReviewHistoryEntry>();
   for (const entry of sorted) {
-    byRow.set(
-      rowHistoryKey(
-        entry.matchedTextNorm,
-        entry.projectLabel,
-        entry.employeeName,
-      ),
-      entry,
-    );
+    byRow.set(entryRowKey(entry), entry);
   }
 
   return proposals.map((p) => {
-    const saved = byRow.get(
-      rowHistoryKey(
-        normalizeText(p.matchedText),
-        normalizeText(p.projectLabel),
-        normalizeText(p.employeeName),
-      ),
-    );
+    const saved = byRow.get(proposalRowKey(p));
     if (!saved) return p;
     return {
       ...p,
@@ -139,4 +148,57 @@ export function applyReviewHistory(
         : p.triggerText,
     };
   });
+}
+
+/**
+ * Re-propose safely: apply Redis history, then overlay in-session
+ * Accept/Delete/edits by highlight row (not proposal id / ruleId).
+ */
+export function mergeProposalsWithSessionAndHistory(
+  fresh: HighlightProposal[],
+  session: HighlightProposal[],
+  entries: ReviewHistoryEntry[],
+): HighlightProposal[] {
+  const fromHistory = applyReviewHistory(fresh, entries);
+
+  const sessionByRow = new Map<string, HighlightProposal>();
+  for (const p of session) {
+    if (p.status !== 'accepted' && p.status !== 'deleted') continue;
+    sessionByRow.set(proposalRowKey(p), p);
+  }
+  if (sessionByRow.size === 0) return fromHistory;
+
+  return fromHistory.map((p) => {
+    const prior = sessionByRow.get(proposalRowKey(p));
+    if (!prior) return p;
+    return {
+      ...p,
+      status: prior.status,
+      comment: prior.comment.trim() ? prior.comment : p.comment,
+      triggerText: prior.triggerText.trim()
+        ? prior.triggerText
+        : p.triggerText,
+    };
+  });
+}
+
+/** Upsert one saved decision into the in-memory history list. */
+export function upsertReviewHistoryEntry(
+  entries: ReviewHistoryEntry[],
+  next: ReviewHistoryEntry,
+): ReviewHistoryEntry[] {
+  const key = entryRowKey(next);
+  return [...entries.filter((e) => entryRowKey(e) !== key), next];
+}
+
+/** Remove a row decision from the in-memory history list. */
+export function removeReviewHistoryRow(
+  entries: ReviewHistoryEntry[],
+  proposal: Pick<
+    HighlightProposal,
+    'matchedText' | 'projectLabel' | 'employeeName'
+  >,
+): ReviewHistoryEntry[] {
+  const key = proposalRowKey(proposal);
+  return entries.filter((e) => entryRowKey(e) !== key);
 }
