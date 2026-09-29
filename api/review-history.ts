@@ -3,6 +3,7 @@ import { Redis } from '@upstash/redis';
 
 const INDEX_PREFIX = 'review-history:index:period:';
 const ENTRY_PREFIX = 'review-history:entry:';
+const PERIODS_CATALOG_KEY = 'review-history:periods';
 
 export type ReviewHistoryEntry = {
   historyId: string;
@@ -42,8 +43,65 @@ function periodIndexKey(periodStart: string, periodEnd: string): string {
   return `${INDEX_PREFIX}${normalizeText(periodStart)}::${normalizeText(periodEnd)}`;
 }
 
+function periodCatalogValue(periodStart: string, periodEnd: string): string {
+  return `${normalizeText(periodStart)}::${normalizeText(periodEnd)}`;
+}
+
 function entryKey(historyId: string): string {
   return `${ENTRY_PREFIX}${historyId}`;
+}
+
+/** Parse MM/DD/YYYY or YYYY-MM-DD to a UTC day timestamp for overlap checks. */
+function parsePeriodDate(value: string): number | null {
+  const t = normalizeText(value);
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
+  if (iso) {
+    return Date.UTC(
+      Number(iso[1]),
+      Number(iso[2]) - 1,
+      Number(iso[3]),
+    );
+  }
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t);
+  if (us) {
+    return Date.UTC(
+      Number(us[3]),
+      Number(us[1]) - 1,
+      Number(us[2]),
+    );
+  }
+  return null;
+}
+
+function periodsOverlap(
+  aStart: string,
+  aEnd: string,
+  bStart: string,
+  bEnd: string,
+): boolean {
+  const as = parsePeriodDate(aStart);
+  const ae = parsePeriodDate(aEnd);
+  const bs = parsePeriodDate(bStart);
+  const be = parsePeriodDate(bEnd);
+  if (as == null || ae == null || bs == null || be == null) {
+    // Fall back to exact-period match when dates cannot be parsed.
+    return (
+      normalizeText(aStart) === normalizeText(bStart) &&
+      normalizeText(aEnd) === normalizeText(bEnd)
+    );
+  }
+  return as <= be && bs <= ae;
+}
+
+function splitPeriodCatalogValue(
+  value: string,
+): { start: string; end: string } | null {
+  const idx = value.indexOf('::');
+  if (idx <= 0) return null;
+  const start = value.slice(0, idx);
+  const end = value.slice(idx + 2);
+  if (!start || !end) return null;
+  return { start, end };
 }
 
 function sameRow(
@@ -60,6 +118,34 @@ function sameRow(
     normalizeText(a.matchedTextNorm) === normalizeText(b.matchedTextNorm) &&
     normalizeText(a.projectLabel) === normalizeText(b.projectLabel) &&
     normalizeText(a.employeeName) === normalizeText(b.employeeName)
+  );
+}
+
+function rowKey(
+  entry: Pick<
+    ReviewHistoryEntry,
+    'matchedTextNorm' | 'projectLabel' | 'employeeName'
+  >,
+): string {
+  return [
+    normalizeText(entry.matchedTextNorm),
+    normalizeText(entry.projectLabel),
+    normalizeText(entry.employeeName),
+  ].join('::');
+}
+
+function mergeEntriesByRowNewest(
+  entries: ReviewHistoryEntry[],
+): ReviewHistoryEntry[] {
+  const sorted = [...entries].sort((a, b) =>
+    a.updatedAt.localeCompare(b.updatedAt),
+  );
+  const byRow = new Map<string, ReviewHistoryEntry>();
+  for (const entry of sorted) {
+    byRow.set(rowKey(entry), entry);
+  }
+  return Array.from(byRow.values()).sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt),
   );
 }
 
@@ -86,8 +172,69 @@ async function loadPeriodEntries(
 
   return values
     .map((v) => v.entry)
-    .filter((v): v is ReviewHistoryEntry => v !== null)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .filter((v): v is ReviewHistoryEntry => v !== null);
+}
+
+/** Discover period indexes (backfills catalog for periods saved before catalog existed). */
+async function listKnownPeriods(redis: Redis): Promise<string[]> {
+  const found = new Set<string>(
+    ((await redis.smembers(PERIODS_CATALOG_KEY)) as string[] | null) ?? [],
+  );
+
+  let cursor: string | number = 0;
+  for (let i = 0; i < 30; i += 1) {
+    const result = (await redis.scan(cursor, {
+      match: `${INDEX_PREFIX}*`,
+      count: 100,
+    })) as [string | number, string[]];
+    const next = result[0];
+    const keys = result[1] ?? [];
+    for (const key of keys) {
+      if (!key.startsWith(INDEX_PREFIX)) continue;
+      const suffix = key.slice(INDEX_PREFIX.length);
+      if (suffix.includes('::')) found.add(suffix);
+    }
+    cursor = next;
+    if (cursor === 0 || cursor === '0') break;
+  }
+
+  if (found.size > 0) {
+    await redis.sadd(PERIODS_CATALOG_KEY, ...Array.from(found));
+  }
+  return Array.from(found);
+}
+
+/** Load exact period plus any catalog periods that overlap the requested range. */
+async function loadOverlappingPeriodEntries(
+  redis: Redis,
+  periodStart: string,
+  periodEnd: string,
+): Promise<ReviewHistoryEntry[]> {
+  const catalog = await listKnownPeriods(redis);
+  const periodPairs = new Map<string, { start: string; end: string }>();
+
+  periodPairs.set(periodCatalogValue(periodStart, periodEnd), {
+    start: normalizeText(periodStart),
+    end: normalizeText(periodEnd),
+  });
+
+  for (const raw of catalog) {
+    const parsed = splitPeriodCatalogValue(raw);
+    if (!parsed) continue;
+    if (periodsOverlap(periodStart, periodEnd, parsed.start, parsed.end)) {
+      periodPairs.set(periodCatalogValue(parsed.start, parsed.end), {
+        start: parsed.start,
+        end: parsed.end,
+      });
+    }
+  }
+
+  const batches = await Promise.all(
+    Array.from(periodPairs.values()).map((p) =>
+      loadPeriodEntries(redis, p.start, p.end),
+    ),
+  );
+  return mergeEntriesByRowNewest(batches.flat());
 }
 
 async function deleteRowDuplicates(
@@ -109,6 +256,31 @@ async function deleteRowDuplicates(
     await redis.del(entryKey(entry.historyId));
     await redis.srem(indexKey, entry.historyId);
     deleted += 1;
+  }
+  return deleted;
+}
+
+/** Remove a highlight-row decision from every known period index. */
+async function deleteRowAcrossCatalog(
+  redis: Redis,
+  row: Pick<
+    ReviewHistoryEntry,
+    'matchedTextNorm' | 'projectLabel' | 'employeeName'
+  >,
+  keepHistoryId?: string,
+): Promise<number> {
+  const catalog = await listKnownPeriods(redis);
+  let deleted = 0;
+  for (const raw of catalog) {
+    const parsed = splitPeriodCatalogValue(raw);
+    if (!parsed) continue;
+    deleted += await deleteRowDuplicates(
+      redis,
+      parsed.start,
+      parsed.end,
+      row,
+      keepHistoryId,
+    );
   }
   return deleted;
 }
@@ -149,7 +321,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return;
       }
 
-      const entries = await loadPeriodEntries(redis, periodStart, periodEnd);
+      const entries = await loadOverlappingPeriodEntries(
+        redis,
+        periodStart,
+        periodEnd,
+      );
       res.status(200).json({ entries });
       return;
     }
@@ -207,8 +383,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updatedAt,
       };
 
-      // Drop older ruleId-keyed duplicates for the same highlight row.
-      await deleteRowDuplicates(redis, periodStart, periodEnd, entry, historyId);
+      // Register period, drop older same-row duplicates across all known periods.
+      await redis.sadd(PERIODS_CATALOG_KEY, periodCatalogValue(periodStart, periodEnd));
+      await deleteRowAcrossCatalog(redis, entry, historyId);
 
       await redis.set(entryKey(historyId), entry);
       await redis.sadd(periodIndexKey(periodStart, periodEnd), historyId);
@@ -227,16 +404,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const projectLabel = String(req.query['projectLabel'] ?? '').trim();
       const employeeName = String(req.query['employeeName'] ?? '').trim();
 
-      if (periodStart && periodEnd && matchedTextNorm && projectLabel && employeeName) {
-        const deleted = await deleteRowDuplicates(
+      if (matchedTextNorm && projectLabel && employeeName) {
+        const deleted = await deleteRowAcrossCatalog(
           redis,
-          periodStart,
-          periodEnd,
           { matchedTextNorm, projectLabel, employeeName },
         );
         if (historyId) {
           await redis.del(entryKey(historyId));
-          await redis.srem(periodIndexKey(periodStart, periodEnd), historyId);
+          if (periodStart && periodEnd) {
+            await redis.srem(
+              periodIndexKey(periodStart, periodEnd),
+              historyId,
+            );
+          }
         }
         res.status(200).json({ ok: true, deletedCount: deleted });
         return;
@@ -253,7 +433,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       res.status(400).json({
         error:
-          'Provide historyId, or periodStart+periodEnd+matchedTextNorm+projectLabel+employeeName.',
+          'Provide historyId, or matchedTextNorm+projectLabel+employeeName.',
       });
       return;
     }

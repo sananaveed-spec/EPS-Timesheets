@@ -54,9 +54,9 @@ export type ReviewHistoryKeyParts = {
   employeeName: string;
 };
 
-/** Stable id for a highlight row within a report period.
- *  Intentionally ignores ruleId and edited trigger/comment so Accept/Delete
- *  still restore after highlight-rule changes or comment regenerations.
+/** Stable id for a highlight row.
+ *  Intentionally ignores ruleId, period, and edited trigger/comment so
+ *  Accept/Delete restore across date-range changes and rule regenerations.
  */
 export function makeReviewHistoryKeyParts(
   proposal: Pick<
@@ -72,13 +72,8 @@ export function makeReviewHistoryKeyParts(
   const periodStartNorm = normalizeText(periodStart);
   const periodEndNorm = normalizeText(periodEnd);
 
-  const raw = [
-    periodStartNorm,
-    periodEndNorm,
-    matchedTextNorm,
-    projectLabel,
-    employeeName,
-  ].join('::');
+  // Row-only id so Sep 1–27 decisions still match when loading Sep 1–29.
+  const raw = [matchedTextNorm, projectLabel, employeeName].join('::');
 
   return {
     historyId: fnv1a64Hex(raw),
