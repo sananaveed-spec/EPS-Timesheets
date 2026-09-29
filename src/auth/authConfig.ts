@@ -19,8 +19,14 @@ export function getMsalConfig(): Configuration {
 }
 
 export const loginRequest = {
-  scopes: ['User.Read'],
+  // Mail scopes at login so send does not need a second consent popup.
+  scopes: ['User.Read', 'Mail.Send', 'Mail.ReadWrite'],
   extraQueryParameters: {
     domain_hint: allowedEmailDomain,
   },
+};
+
+/** Same Graph scopes as login; no domain_hint (conflicts with login_hint). */
+export const mailRequest = {
+  scopes: ['User.Read', 'Mail.Send', 'Mail.ReadWrite'],
 };

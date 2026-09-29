@@ -1,6 +1,12 @@
 import type { ManagedUser, MentionUser, OfficeCategory } from '../types';
 import { sameEmployeeName } from './employeeCategories';
 import {
+  DEFAULT_EMAIL_PRESETS,
+  EMAIL_REPORT_OFFICES,
+  type EmailReportOffice,
+  type OfficeEmailPreset,
+} from './emailTemplates';
+import {
   normalizeOfficeCategory,
   officeCategoryFromLegacyName,
 } from './officeCategories';
@@ -162,4 +168,57 @@ export function loadMentionUsers(): MentionUser[] {
 export function saveMentionUsers(users: MentionUser[]): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(MENTION_STORAGE_KEY, JSON.stringify(users));
+}
+
+const EMAIL_PRESETS_STORAGE_KEY = 'clockify-converter-email-presets-v3';
+
+export function loadEmailPresets(): Record<
+  EmailReportOffice,
+  OfficeEmailPreset
+> {
+  const defaults: Record<EmailReportOffice, OfficeEmailPreset> = {
+    'eps-clovis-office': { ...DEFAULT_EMAIL_PRESETS['eps-clovis-office'] },
+    'eps-fresno-shop': { ...DEFAULT_EMAIL_PRESETS['eps-fresno-shop'] },
+  };
+  if (typeof window === 'undefined') return defaults;
+
+  try {
+    const raw = window.localStorage.getItem(EMAIL_PRESETS_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<
+      Record<EmailReportOffice, Partial<OfficeEmailPreset>>
+    >;
+    for (const office of EMAIL_REPORT_OFFICES) {
+      const saved = parsed[office];
+      if (!saved) continue;
+      defaults[office] = {
+        office,
+        to: Array.isArray(saved.to)
+          ? saved.to.filter((e): e is string => typeof e === 'string')
+          : defaults[office].to,
+        cc: Array.isArray(saved.cc)
+          ? saved.cc.filter((e): e is string => typeof e === 'string')
+          : defaults[office].cc,
+        greetingName:
+          typeof saved.greetingName === 'string' && saved.greetingName.trim()
+            ? saved.greetingName.trim()
+            : defaults[office].greetingName,
+      };
+    }
+  } catch {
+    /* keep defaults */
+  }
+  return defaults;
+}
+
+export function saveEmailPreset(preset: OfficeEmailPreset): void {
+  if (typeof window === 'undefined') return;
+  const all = loadEmailPresets();
+  all[preset.office] = {
+    office: preset.office,
+    to: preset.to,
+    cc: preset.cc,
+    greetingName: preset.greetingName,
+  };
+  window.localStorage.setItem(EMAIL_PRESETS_STORAGE_KEY, JSON.stringify(all));
 }

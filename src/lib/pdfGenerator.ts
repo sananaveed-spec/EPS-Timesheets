@@ -1158,13 +1158,12 @@ function drawPhraseHighlightsInCell(
   return found;
 }
 
-export async function generatePdfsZip(
+export async function buildPdfsZipBlob(
   pivot: PivotData,
-  zipFilename = 'time-reports.zip',
   revNumber = 1,
   managedUsers: ManagedUser[] = [],
   acceptedHighlights: HighlightProposal[] = [],
-): Promise<void> {
+): Promise<Blob> {
   const dates = pivot.dates;
   const numDateCols = dates.length;
   const dateHeaderLabels = dates.map(getVerticalDateLabel);
@@ -1452,6 +1451,22 @@ const columnStyles = {
     compression: 'DEFLATE',
     compressionOptions: { level: 9 },
   });
+  return zipBlob;
+}
+
+export async function generatePdfsZip(
+  pivot: PivotData,
+  zipFilename = 'time-reports.zip',
+  revNumber = 1,
+  managedUsers: ManagedUser[] = [],
+  acceptedHighlights: HighlightProposal[] = [],
+): Promise<void> {
+  const zipBlob = await buildPdfsZipBlob(
+    pivot,
+    revNumber,
+    managedUsers,
+    acceptedHighlights,
+  );
   const url = URL.createObjectURL(zipBlob);
   // Ensure browsers reliably treat this as a download (not a navigation).
   const a = document.createElement('a');

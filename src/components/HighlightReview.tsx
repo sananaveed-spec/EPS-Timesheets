@@ -1,18 +1,56 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { HighlightProposal } from '../lib/highlightRules';
 import { groupProposalsByEmployee } from '../lib/highlightRules';
+import {
+  EMAIL_REPORT_OFFICES,
+  HARDCODED_CC_EMAIL,
+  HARDCODED_FROM_EMAIL,
+  HARDCODED_SENDER_FIRST_NAME,
+  HARDCODED_TO_EMAIL,
+  FRESNO_SHOP_CC_EMAILS,
+  CLOVIS_OFFICE_CC_EMAILS,
+  OFFICE_GREETING_NAME,
+  buildTimesheetBody,
+  buildTimesheetSubject,
+  buildTimesheetZipFilename,
+  officeEmailLabel,
+  parseEmailList,
+  type EmailReportOffice,
+} from '../lib/emailTemplates';
+import {
+  formatScheduledSendLabel,
+  nextEightAmPacific,
+} from '../lib/graphMail';
 import {
   clearReviewHistoryEntry,
   saveReviewHistoryEntry,
 } from '../lib/reviewHistoryClient';
 import type { ReviewHistoryEntry } from '../lib/reviewHistoryFingerprint';
+import { loadEmailPresets, saveEmailPreset } from '../lib/userSettings';
+
+export interface SendEmailRequest {
+  office: EmailReportOffice;
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;
+  zipFilename: string;
+}
+
+export interface SendEmailResult {
+  scheduledAt: Date;
+}
 
 interface HighlightReviewProps {
   proposals: HighlightProposal[];
   onChange: (proposals: HighlightProposal[]) => void;
   onDownload: () => void;
+  onSendEmail?: (
+    request: SendEmailRequest,
+  ) => void | Promise<void | SendEmailResult>;
   downloadDisabled?: boolean;
   downloading?: boolean;
+  sendingEmail?: boolean;
   periodStart?: string;
   periodEnd?: string;
   onHistoryPersisted?: (entry: ReviewHistoryEntry) => void;
@@ -31,8 +69,10 @@ export function HighlightReview({
   proposals,
   onChange,
   onDownload,
+  onSendEmail,
   downloadDisabled = false,
   downloading = false,
+  sendingEmail = false,
   periodStart = '',
   periodEnd = '',
   onHistoryPersisted,
@@ -47,6 +87,17 @@ export function HighlightReview({
   const [rejectSaving, setRejectSaving] = useState(false);
   const [historySaveError, setHistorySaveError] = useState<string | null>(null);
 
+  const [emailOffice, setEmailOffice] = useState<EmailReportOffice>(
+    'eps-fresno-shop',
+  );
+  const [emailFrom, setEmailFrom] = useState(HARDCODED_FROM_EMAIL);
+  const [emailTo, setEmailTo] = useState(HARDCODED_TO_EMAIL);
+  const [emailCc, setEmailCc] = useState(FRESNO_SHOP_CC_EMAILS.join(', '));
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
+
   const safeIndex =
     groups.length === 0 ? 0 : Math.min(fileIndex, groups.length - 1);
   const current = groups[safeIndex];
@@ -55,6 +106,38 @@ export function HighlightReview({
   const allResolved =
     proposals.length === 0 ||
     proposals.every((p) => p.status === 'accepted' || p.status === 'deleted');
+
+  useEffect(() => {
+    const presets = loadEmailPresets();
+    const preset = presets[emailOffice];
+    setEmailFrom(HARDCODED_FROM_EMAIL);
+    setEmailTo(
+      preset.to.length > 0 ? preset.to.join(', ') : HARDCODED_TO_EMAIL,
+    );
+    setEmailCc(
+      preset.cc.length > 0
+        ? preset.cc.join(', ')
+        : emailOffice === 'eps-fresno-shop'
+          ? FRESNO_SHOP_CC_EMAILS.join(', ')
+          : emailOffice === 'eps-clovis-office'
+            ? CLOVIS_OFFICE_CC_EMAILS.join(', ')
+            : HARDCODED_CC_EMAIL,
+    );
+    setEmailSubject(
+      buildTimesheetSubject(emailOffice, periodStart, periodEnd),
+    );
+    setEmailBody(
+      buildTimesheetBody({
+        greetingName:
+          preset.greetingName || OFFICE_GREETING_NAME[emailOffice],
+        periodStart,
+        periodEnd,
+        senderDisplayName: HARDCODED_SENDER_FIRST_NAME,
+      }),
+    );
+    setEmailError(null);
+    setEmailSuccess(null);
+  }, [emailOffice, periodStart, periodEnd]);
 
   const persistDecision = async (
     proposal: HighlightProposal,
@@ -167,6 +250,161 @@ export function HighlightReview({
     }
   };
 
+  const scheduledPreview = formatScheduledSendLabel(nextEightAmPacific());
+
+  const handleSendEmail = async () => {
+    if (!onSendEmail) return;
+    setEmailError(null);
+    setEmailSuccess(null);
+    const to = parseEmailList(emailTo);
+    const cc = parseEmailList(emailCc);
+    if (to.length === 0) {
+      setEmailError('Add at least one To address.');
+      return;
+    }
+    const subject =
+      emailSubject.trim() ||
+      buildTimesheetSubject(emailOffice, periodStart, periodEnd);
+    const body =
+      emailBody.trim() ||
+      buildTimesheetBody({
+        greetingName: OFFICE_GREETING_NAME[emailOffice],
+        periodStart,
+        periodEnd,
+        senderDisplayName: HARDCODED_SENDER_FIRST_NAME,
+      });
+    saveEmailPreset({
+      office: emailOffice,
+      to,
+      cc,
+      greetingName: OFFICE_GREETING_NAME[emailOffice],
+    });
+    const zipFilename = buildTimesheetZipFilename(
+      emailOffice,
+      periodStart,
+      periodEnd,
+    );
+    try {
+      const result = await onSendEmail({
+        office: emailOffice,
+        to,
+        cc,
+        subject,
+        body,
+        zipFilename,
+      });
+      const when =
+        result && 'scheduledAt' in result && result.scheduledAt
+          ? formatScheduledSendLabel(result.scheduledAt)
+          : scheduledPreview;
+      setEmailSuccess(`Scheduled to ${to.join(', ')} — ${when}`);
+    } catch (e) {
+      setEmailError(e instanceof Error ? e.message : 'Failed to send email.');
+    }
+  };
+
+  const fieldClass =
+    'mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm text-gray-800';
+
+  const emailPanel = onSendEmail ? (
+    <div className="mt-3 w-full max-w-md rounded-lg border border-gray-200 bg-white p-3 text-left">
+      <p className="text-sm font-semibold text-gray-900">Send email</p>
+      <label className="mt-2 block text-xs font-medium text-gray-600">
+        Office
+        <select
+          value={emailOffice}
+          onChange={(e) =>
+            setEmailOffice(e.target.value as EmailReportOffice)
+          }
+          className={fieldClass}
+        >
+          {EMAIL_REPORT_OFFICES.map((office) => (
+            <option key={office} value={office}>
+              {officeEmailLabel(office)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="mt-2 block text-xs font-medium text-gray-600">
+        From
+        <input
+          type="text"
+          value={emailFrom}
+          onChange={(e) => setEmailFrom(e.target.value)}
+          className={fieldClass}
+        />
+      </label>
+      <p className="mt-1 text-[11px] text-gray-500">
+        Sends as the signed-in Microsoft account (From is for your reference).
+      </p>
+      <label className="mt-2 block text-xs font-medium text-gray-600">
+        To
+        <input
+          type="text"
+          value={emailTo}
+          onChange={(e) => setEmailTo(e.target.value)}
+          placeholder="name@epsfresno.com"
+          className={fieldClass}
+        />
+      </label>
+      <label className="mt-2 block text-xs font-medium text-gray-600">
+        Cc
+        <input
+          type="text"
+          value={emailCc}
+          onChange={(e) => setEmailCc(e.target.value)}
+          placeholder="name@epsfresno.com, other@epsfresno.com"
+          className={fieldClass}
+        />
+      </label>
+      <label className="mt-2 block text-xs font-medium text-gray-600">
+        Subject
+        <input
+          type="text"
+          value={emailSubject}
+          onChange={(e) => setEmailSubject(e.target.value)}
+          className={fieldClass}
+        />
+      </label>
+      <label className="mt-2 block text-xs font-medium text-gray-600">
+        Body
+        <textarea
+          rows={6}
+          value={emailBody}
+          onChange={(e) => setEmailBody(e.target.value)}
+          className={`${fieldClass} resize-y`}
+        />
+      </label>
+      <p className="mt-2 text-xs text-gray-600">
+        Schedules for <span className="font-medium">{scheduledPreview}</span>
+        {' '}(mailbox timezone).
+      </p>
+      {emailError && (
+        <p className="mt-2 text-xs text-red-600">{emailError}</p>
+      )}
+      {emailSuccess && (
+        <p className="mt-2 text-xs text-green-700">{emailSuccess}</p>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          void handleSendEmail();
+        }}
+        disabled={
+          !allResolved ||
+          downloadDisabled ||
+          downloading ||
+          sendingEmail ||
+          !periodStart ||
+          !periodEnd
+        }
+        className="mt-3 rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {sendingEmail ? 'Scheduling…' : 'Schedule email with ZIP (8 AM PT)'}
+      </button>
+    </div>
+  ) : null;
+
   if (groups.length === 0) {
     return (
       <div className="mt-6 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6">
@@ -185,6 +423,7 @@ export function HighlightReview({
         >
           {downloading ? 'Preparing ZIP…' : 'Download ZIP (all employee PDFs)'}
         </button>
+        {emailPanel}
       </div>
     );
   }
@@ -512,6 +751,7 @@ export function HighlightReview({
               ? 'Preparing ZIP…'
               : 'Download ZIP (accepted highlights only)'}
           </button>
+          {allResolved ? emailPanel : null}
         </div>
       </div>
     </div>

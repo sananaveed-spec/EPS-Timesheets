@@ -3,7 +3,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { getAccountEmail, isAllowedOrganizationEmail } from './auth/organization';
 import { logoutCompletely } from './auth/session';
 import { ReportSetup } from './components/ReportSetup';
-import { HighlightReview } from './components/HighlightReview';
+import {
+  HighlightReview,
+  type SendEmailRequest,
+} from './components/HighlightReview';
 import { LoginPage } from './components/LoginPage';
 import { UserManager } from './components/UserManager';
 import { fetchClockifyDetailedRange } from './lib/clockifyApi';
@@ -17,7 +20,11 @@ import {
   proposeHighlights,
   type HighlightProposal,
 } from './lib/highlightRules';
-import { generatePdfsZip } from './lib/pdfGenerator';
+import {
+  acquireMailAccessToken,
+  sendTimesheetMail,
+} from './lib/graphMail';
+import { buildPdfsZipBlob, generatePdfsZip } from './lib/pdfGenerator';
 import { transformToPivot } from './lib/transformer';
 import {
   loadManagedUsers,
@@ -53,6 +60,7 @@ function AppContent() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
   const [revNumber, setRevNumber] = useState<number>(1);
   const [highlightProposals, setHighlightProposals] = useState<
     HighlightProposal[]
@@ -157,6 +165,36 @@ function AppContent() {
       setDownloading(false);
     }
   }, [pivot, sourceLabel, revNumber, managedUsers, highlightProposals]);
+
+  const handleSendEmail = useCallback(
+    async (request: SendEmailRequest) => {
+      if (!pivot) throw new Error('No report loaded.');
+      setSendingEmail(true);
+      try {
+        const zipBlob = await buildPdfsZipBlob(
+          pivot,
+          revNumber,
+          managedUsers,
+          getAcceptedHighlights(highlightProposals),
+        );
+        const accessToken = await acquireMailAccessToken(instance);
+        return await sendTimesheetMail({
+          accessToken,
+          to: request.to,
+          cc: request.cc,
+          subject: request.subject,
+          body: request.body,
+          attachment: {
+            filename: request.zipFilename,
+            blob: zipBlob,
+          },
+        });
+      } finally {
+        setSendingEmail(false);
+      }
+    },
+    [pivot, revNumber, managedUsers, highlightProposals, instance],
+  );
 
   const handleLogout = useCallback(() => {
     void logoutCompletely(instance);
@@ -411,7 +449,9 @@ function AppContent() {
                     onDownload={() => {
                       void handleDownloadZip();
                     }}
+                    onSendEmail={handleSendEmail}
                     downloading={downloading}
+                    sendingEmail={sendingEmail}
                   />
                 )}
               </>
