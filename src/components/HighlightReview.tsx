@@ -43,7 +43,6 @@ export function HighlightReview({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTrigger, setDraftTrigger] = useState('');
   const [draftComment, setDraftComment] = useState('');
-  const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const [rejectSaving, setRejectSaving] = useState(false);
   const [historySaveError, setHistorySaveError] = useState<string | null>(null);
@@ -134,7 +133,6 @@ export function HighlightReview({
   const deleteProposal = async (proposal: HighlightProposal) => {
     const deleted = { ...proposal, status: 'deleted' as const };
     updateProposal(proposal.id, { status: 'deleted' });
-    setRejectingId(null);
     try {
       await persistDecision(deleted, 'deleted');
     } catch (e) {
@@ -289,7 +287,6 @@ export function HighlightReview({
       <ul className="mt-3 space-y-3">
         {current.proposals.map((item) => {
           const isEditing = editingId === item.id;
-          const isRejecting = rejectingId === item.id;
           return (
             <li
               key={item.id}
@@ -406,35 +403,7 @@ export function HighlightReview({
 
               {!isEditing && (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {isRejecting ? (
-                    <>
-                      <p className="w-full text-xs text-gray-600">
-                        Delete this highlight? It will stay marked deleted on
-                        the next run of this period.
-                      </p>
-                      <button
-                        type="button"
-                        disabled={rejectSaving}
-                        onClick={() => {
-                          setRejectSaving(true);
-                          void deleteProposal(item).finally(() =>
-                            setRejectSaving(false),
-                          );
-                        }}
-                        className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {rejectSaving ? 'Saving…' : 'Confirm delete'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={rejectSaving}
-                        onClick={() => setRejectingId(null)}
-                        className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : item.status === 'deleted' ? (
+                  {item.status === 'deleted' ? (
                     <button
                       type="button"
                       onClick={() => void restoreProposal(item)}
@@ -458,8 +427,8 @@ export function HighlightReview({
                       <button
                         type="button"
                         onClick={() => {
-                          setRejectingId(item.id);
                           setHistorySaveError(null);
+                          void deleteProposal(item);
                         }}
                         className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                       >
@@ -489,8 +458,8 @@ export function HighlightReview({
                       <button
                         type="button"
                         onClick={() => {
-                          setRejectingId(item.id);
                           setHistorySaveError(null);
+                          void deleteProposal(item);
                         }}
                         className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                       >
