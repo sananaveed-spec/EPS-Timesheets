@@ -199,7 +199,9 @@ async function listKnownPeriods(redis: Redis): Promise<string[]> {
   }
 
   if (found.size > 0) {
-    await redis.sadd(PERIODS_CATALOG_KEY, ...Array.from(found));
+    for (const member of found) {
+      await redis.sadd(PERIODS_CATALOG_KEY, member);
+    }
   }
   return Array.from(found);
 }
