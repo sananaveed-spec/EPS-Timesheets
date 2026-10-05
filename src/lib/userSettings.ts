@@ -170,7 +170,7 @@ export function saveMentionUsers(users: MentionUser[]): void {
   window.localStorage.setItem(MENTION_STORAGE_KEY, JSON.stringify(users));
 }
 
-const EMAIL_PRESETS_STORAGE_KEY = 'clockify-converter-email-presets-v3';
+const EMAIL_PRESETS_STORAGE_KEY = 'clockify-converter-email-presets-v5';
 
 export function loadEmailPresets(): Record<
   EmailReportOffice,
@@ -193,6 +193,10 @@ export function loadEmailPresets(): Record<
       if (!saved) continue;
       defaults[office] = {
         office,
+        from:
+          typeof saved.from === 'string' && saved.from.trim()
+            ? saved.from.trim()
+            : defaults[office].from,
         to: Array.isArray(saved.to)
           ? saved.to.filter((e): e is string => typeof e === 'string')
           : defaults[office].to,
@@ -203,6 +207,11 @@ export function loadEmailPresets(): Record<
           typeof saved.greetingName === 'string' && saved.greetingName.trim()
             ? saved.greetingName.trim()
             : defaults[office].greetingName,
+        senderFirstName:
+          typeof saved.senderFirstName === 'string' &&
+          saved.senderFirstName.trim()
+            ? saved.senderFirstName.trim()
+            : defaults[office].senderFirstName,
       };
     }
   } catch {
@@ -216,9 +225,11 @@ export function saveEmailPreset(preset: OfficeEmailPreset): void {
   const all = loadEmailPresets();
   all[preset.office] = {
     office: preset.office,
+    from: preset.from,
     to: preset.to,
     cc: preset.cc,
     greetingName: preset.greetingName,
+    senderFirstName: preset.senderFirstName,
   };
   window.localStorage.setItem(EMAIL_PRESETS_STORAGE_KEY, JSON.stringify(all));
 }

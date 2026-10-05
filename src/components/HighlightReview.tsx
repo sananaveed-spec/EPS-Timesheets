@@ -2,14 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import type { HighlightProposal } from '../lib/highlightRules';
 import { groupProposalsByEmployee } from '../lib/highlightRules';
 import {
+  DEFAULT_EMAIL_PRESETS,
   EMAIL_REPORT_OFFICES,
-  HARDCODED_CC_EMAIL,
-  HARDCODED_FROM_EMAIL,
-  HARDCODED_SENDER_FIRST_NAME,
-  HARDCODED_TO_EMAIL,
-  FRESNO_SHOP_CC_EMAILS,
-  CLOVIS_OFFICE_CC_EMAILS,
   OFFICE_GREETING_NAME,
+  OFFICE_SENDER_FIRST_NAME,
   buildTimesheetBody,
   buildTimesheetSubject,
   buildTimesheetZipFilename,
@@ -90,9 +86,10 @@ export function HighlightReview({
   const [emailOffice, setEmailOffice] = useState<EmailReportOffice>(
     'eps-fresno-shop',
   );
-  const [emailFrom, setEmailFrom] = useState(HARDCODED_FROM_EMAIL);
-  const [emailTo, setEmailTo] = useState(HARDCODED_TO_EMAIL);
-  const [emailCc, setEmailCc] = useState(FRESNO_SHOP_CC_EMAILS.join(', '));
+  const fresnoDefaults = DEFAULT_EMAIL_PRESETS['eps-fresno-shop'];
+  const [emailFrom, setEmailFrom] = useState(fresnoDefaults.from);
+  const [emailTo, setEmailTo] = useState(fresnoDefaults.to.join(', '));
+  const [emailCc, setEmailCc] = useState(fresnoDefaults.cc.join(', '));
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -110,19 +107,9 @@ export function HighlightReview({
   useEffect(() => {
     const presets = loadEmailPresets();
     const preset = presets[emailOffice];
-    setEmailFrom(HARDCODED_FROM_EMAIL);
-    setEmailTo(
-      preset.to.length > 0 ? preset.to.join(', ') : HARDCODED_TO_EMAIL,
-    );
-    setEmailCc(
-      preset.cc.length > 0
-        ? preset.cc.join(', ')
-        : emailOffice === 'eps-fresno-shop'
-          ? FRESNO_SHOP_CC_EMAILS.join(', ')
-          : emailOffice === 'eps-clovis-office'
-            ? CLOVIS_OFFICE_CC_EMAILS.join(', ')
-            : HARDCODED_CC_EMAIL,
-    );
+    setEmailFrom(preset.from);
+    setEmailTo(preset.to.join(', '));
+    setEmailCc(preset.cc.join(', '));
     setEmailSubject(
       buildTimesheetSubject(emailOffice, periodStart, periodEnd),
     );
@@ -132,7 +119,8 @@ export function HighlightReview({
           preset.greetingName || OFFICE_GREETING_NAME[emailOffice],
         periodStart,
         periodEnd,
-        senderDisplayName: HARDCODED_SENDER_FIRST_NAME,
+        senderDisplayName:
+          preset.senderFirstName || OFFICE_SENDER_FIRST_NAME[emailOffice],
       }),
     );
     setEmailError(null);
@@ -271,13 +259,15 @@ export function HighlightReview({
         greetingName: OFFICE_GREETING_NAME[emailOffice],
         periodStart,
         periodEnd,
-        senderDisplayName: HARDCODED_SENDER_FIRST_NAME,
+        senderDisplayName: OFFICE_SENDER_FIRST_NAME[emailOffice],
       });
     saveEmailPreset({
       office: emailOffice,
+      from: emailFrom.trim() || DEFAULT_EMAIL_PRESETS[emailOffice].from,
       to,
       cc,
       greetingName: OFFICE_GREETING_NAME[emailOffice],
+      senderFirstName: OFFICE_SENDER_FIRST_NAME[emailOffice],
     });
     const zipFilename = buildTimesheetZipFilename(
       emailOffice,

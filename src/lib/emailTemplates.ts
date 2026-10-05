@@ -22,14 +22,12 @@ export function isEmailReportOffice(
 export const HARDCODED_FROM_EMAIL = 'abdur@epsfresno.com';
 export const HARDCODED_TO_EMAIL = 'abdur@epsfresno.com';
 export const HARDCODED_CC_EMAIL = 'sana@epsfresno.com';
-export const FRESNO_SHOP_CC_EMAILS = [
-  HARDCODED_CC_EMAIL,
-  'joni@epsfresno.com',
-] as const;
-export const CLOVIS_OFFICE_CC_EMAILS = [
-  HARDCODED_CC_EMAIL,
-  'zulfi@epsfresno.com',
-] as const;
+export const FRESNO_SHOP_FROM_EMAIL = 'sana@epsfresno.com';
+export const FRESNO_SHOP_TO_EMAIL = 'joni@epsfresno.com';
+export const FRESNO_SHOP_CC_EMAILS = ['abdur@epsfresno.com'] as const;
+export const CLOVIS_OFFICE_FROM_EMAIL = 'sana@epsfresno.com';
+export const CLOVIS_OFFICE_TO_EMAIL = 'zulfi@epsfresno.com';
+export const CLOVIS_OFFICE_CC_EMAILS = ['abdur@epsfresno.com'] as const;
 export const HARDCODED_SENDER_FIRST_NAME = 'Abdur';
 
 /** Body greeting per office (matches existing timesheet email templates). */
@@ -38,11 +36,19 @@ export const OFFICE_GREETING_NAME: Record<EmailReportOffice, string> = {
   'eps-clovis-office': 'Zulfi',
 };
 
+/** Sign-off name after "Thanks," in the body. */
+export const OFFICE_SENDER_FIRST_NAME: Record<EmailReportOffice, string> = {
+  'eps-fresno-shop': 'Sana',
+  'eps-clovis-office': 'Sana',
+};
+
 export interface OfficeEmailPreset {
   office: EmailReportOffice;
+  from: string;
   to: string[];
   cc: string[];
   greetingName: string;
+  senderFirstName: string;
 }
 
 export const DEFAULT_EMAIL_PRESETS: Record<
@@ -51,15 +57,19 @@ export const DEFAULT_EMAIL_PRESETS: Record<
 > = {
   'eps-fresno-shop': {
     office: 'eps-fresno-shop',
-    to: [HARDCODED_TO_EMAIL],
+    from: FRESNO_SHOP_FROM_EMAIL,
+    to: [FRESNO_SHOP_TO_EMAIL],
     cc: [...FRESNO_SHOP_CC_EMAILS],
     greetingName: OFFICE_GREETING_NAME['eps-fresno-shop'],
+    senderFirstName: OFFICE_SENDER_FIRST_NAME['eps-fresno-shop'],
   },
   'eps-clovis-office': {
     office: 'eps-clovis-office',
-    to: [HARDCODED_TO_EMAIL],
+    from: CLOVIS_OFFICE_FROM_EMAIL,
+    to: [CLOVIS_OFFICE_TO_EMAIL],
     cc: [...CLOVIS_OFFICE_CC_EMAILS],
     greetingName: OFFICE_GREETING_NAME['eps-clovis-office'],
+    senderFirstName: OFFICE_SENDER_FIRST_NAME['eps-clovis-office'],
   },
 };
 
@@ -174,15 +184,18 @@ export function fixedTimesheetRecipients(
   to: string[];
   cc: string[];
 } {
+  if (office && DEFAULT_EMAIL_PRESETS[office]) {
+    const preset = DEFAULT_EMAIL_PRESETS[office];
+    return {
+      from: preset.from,
+      to: [...preset.to],
+      cc: [...preset.cc],
+    };
+  }
   return {
     from: HARDCODED_FROM_EMAIL,
     to: [HARDCODED_TO_EMAIL],
-    cc:
-      office === 'eps-fresno-shop'
-        ? [...FRESNO_SHOP_CC_EMAILS]
-        : office === 'eps-clovis-office'
-          ? [...CLOVIS_OFFICE_CC_EMAILS]
-          : [HARDCODED_CC_EMAIL],
+    cc: [HARDCODED_CC_EMAIL],
   };
 }
 
