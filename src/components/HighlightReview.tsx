@@ -31,10 +31,12 @@ export interface SendEmailRequest {
   subject: string;
   body: string;
   zipFilename: string;
+  /** Immediate send vs schedule for 8 AM Pacific. */
+  sendNow?: boolean;
 }
 
 export interface SendEmailResult {
-  scheduledAt: Date;
+  scheduledAt: Date | null;
 }
 
 interface HighlightReviewProps {
@@ -240,7 +242,7 @@ export function HighlightReview({
 
   const scheduledPreview = formatScheduledSendLabel(nextEightAmPacific());
 
-  const handleSendEmail = async () => {
+  const handleSendEmail = async (sendNow: boolean) => {
     if (!onSendEmail) return;
     setEmailError(null);
     setEmailSuccess(null);
@@ -282,12 +284,15 @@ export function HighlightReview({
         subject,
         body,
         zipFilename,
+        sendNow,
       });
-      const when =
-        result && 'scheduledAt' in result && result.scheduledAt
-          ? formatScheduledSendLabel(result.scheduledAt)
-          : scheduledPreview;
-      setEmailSuccess(`Scheduled to ${to.join(', ')} — ${when}`);
+      if (sendNow || !result?.scheduledAt) {
+        setEmailSuccess(`Sent now to ${to.join(', ')}`);
+      } else {
+        setEmailSuccess(
+          `Scheduled to ${to.join(', ')} — ${formatScheduledSendLabel(result.scheduledAt)}`,
+        );
+      }
     } catch (e) {
       setEmailError(e instanceof Error ? e.message : 'Failed to send email.');
     }
@@ -366,8 +371,9 @@ export function HighlightReview({
         />
       </label>
       <p className="mt-2 text-xs text-gray-600">
-        Schedules for <span className="font-medium">{scheduledPreview}</span>
-        {' '}(mailbox timezone).
+        <strong>Schedule</strong> sends at{' '}
+        <span className="font-medium">{scheduledPreview}</span>.{' '}
+        <strong>Send</strong> delivers immediately.
       </p>
       {emailError && (
         <p className="mt-2 text-xs text-red-600">{emailError}</p>
@@ -375,23 +381,42 @@ export function HighlightReview({
       {emailSuccess && (
         <p className="mt-2 text-xs text-green-700">{emailSuccess}</p>
       )}
-      <button
-        type="button"
-        onClick={() => {
-          void handleSendEmail();
-        }}
-        disabled={
-          !allResolved ||
-          downloadDisabled ||
-          downloading ||
-          sendingEmail ||
-          !periodStart ||
-          !periodEnd
-        }
-        className="mt-3 rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {sendingEmail ? 'Scheduling…' : 'Schedule email with ZIP (8 AM PT)'}
-      </button>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            void handleSendEmail(true);
+          }}
+          disabled={
+            !allResolved ||
+            downloadDisabled ||
+            downloading ||
+            sendingEmail ||
+            !periodStart ||
+            !periodEnd
+          }
+          className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {sendingEmail ? 'Working…' : 'Send now'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            void handleSendEmail(false);
+          }}
+          disabled={
+            !allResolved ||
+            downloadDisabled ||
+            downloading ||
+            sendingEmail ||
+            !periodStart ||
+            !periodEnd
+          }
+          className="rounded-md border border-emerald-700 bg-white px-4 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {sendingEmail ? 'Working…' : 'Schedule (8 AM PT)'}
+        </button>
+      </div>
     </div>
   ) : null;
 

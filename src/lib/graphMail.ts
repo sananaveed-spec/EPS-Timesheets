@@ -85,7 +85,9 @@ export interface SendTimesheetMailOptions {
     filename: string;
     blob: Blob;
   };
-  /** Defaults to next 8:00 AM Pacific. */
+  /** When true, send immediately. When false/omitted, schedule for sendAt / next 8 AM PT. */
+  sendNow?: boolean;
+  /** Defaults to next 8:00 AM Pacific when not sendNow. */
   sendAt?: Date;
 }
 
@@ -126,53 +128,101 @@ async function graphJson<T>(
   return JSON.parse(text) as T;
 }
 
+function messagePayload(options: {
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;
+  filename: string;
+  contentBytes: string;
+  deferredSendAt?: Date;
+}) {
+  const message: Record<string, unknown> = {
+    subject: options.subject,
+    body: {
+      contentType: 'Text',
+      content: options.body,
+    },
+    toRecipients: options.to.map((address) => ({
+      emailAddress: { address },
+    })),
+    ccRecipients: options.cc.map((address) => ({
+      emailAddress: { address },
+    })),
+    attachments: [
+      {
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: options.filename,
+        contentType: 'application/zip',
+        contentBytes: options.contentBytes,
+      },
+    ],
+  };
+  if (options.deferredSendAt) {
+    message.singleValueExtendedProperties = [
+      {
+        id: 'SystemTime 0x3FEF',
+        value: toGraphSystemTime(options.deferredSendAt),
+      },
+    ];
+  }
+  return message;
+}
+
 /**
- * Creates a draft with Outlook deferred-send (8 AM Pacific by default), then sends.
- * Requires Mail.Send + Mail.ReadWrite.
+ * Sends immediately via sendMail, or creates a deferred-send draft then sends.
+ * Requires Mail.Send; scheduled path also needs Mail.ReadWrite.
  */
 export async function sendTimesheetMail(
   options: SendTimesheetMailOptions,
-): Promise<{ scheduledAt: Date }> {
+): Promise<{ scheduledAt: Date | null }> {
   const { accessToken, to, cc, subject, body, attachment } = options;
   if (to.length === 0) {
     throw new Error('Add at least one To address.');
   }
 
-  const scheduledAt = options.sendAt ?? nextEightAmPacific();
   const contentBytes = await blobToBase64(attachment.blob);
+
+  if (options.sendNow) {
+    await graphJson<void>(
+      accessToken,
+      'https://graph.microsoft.com/v1.0/me/sendMail',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          message: messagePayload({
+            to,
+            cc,
+            subject,
+            body,
+            filename: attachment.filename,
+            contentBytes,
+          }),
+          saveToSentItems: true,
+        }),
+      },
+    );
+    return { scheduledAt: null };
+  }
+
+  const scheduledAt = options.sendAt ?? nextEightAmPacific();
 
   const draft = await graphJson<{ id: string }>(
     accessToken,
     'https://graph.microsoft.com/v1.0/me/messages',
     {
       method: 'POST',
-      body: JSON.stringify({
-        subject,
-        body: {
-          contentType: 'Text',
-          content: body,
-        },
-        toRecipients: to.map((address) => ({
-          emailAddress: { address },
-        })),
-        ccRecipients: cc.map((address) => ({
-          emailAddress: { address },
-        })),
-        attachments: [
-          {
-            '@odata.type': '#microsoft.graph.fileAttachment',
-            name: attachment.filename,
-            contentType: 'application/zip',
-            contentBytes,
-          },
-        ],
-        singleValueExtendedProperties: [
-          {
-            id: 'SystemTime 0x3FEF',
-            value: toGraphSystemTime(scheduledAt),
-          },
-        ],
-      }),
+      body: JSON.stringify(
+        messagePayload({
+          to,
+          cc,
+          subject,
+          body,
+          filename: attachment.filename,
+          contentBytes,
+          deferredSendAt: scheduledAt,
+        }),
+      ),
     },
   );
 

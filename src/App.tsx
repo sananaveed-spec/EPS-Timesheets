@@ -188,6 +188,7 @@ function AppContent() {
             filename: request.zipFilename,
             blob: zipBlob,
           },
+          sendNow: request.sendNow === true,
         });
       } finally {
         setSendingEmail(false);
