@@ -288,6 +288,13 @@ function isFmlaLeaveContext(value: string): boolean {
   return /\bFMLA\b/.test(value.toUpperCase());
 }
 
+/** Comp Time leave — not "company", "compensation", etc. */
+function isCompTimeContext(value: string): boolean {
+  const normalized = value.toUpperCase();
+  // Word-boundary COMP so "COMPANY" / "COMPENSATION" do not match.
+  return /\bCOMP(\s*[-]?\s*TIME)?\b/.test(normalized);
+}
+
 function hasMiles(description: string): boolean {
   return /\d+\s*(total\s+)?miles?\b|miles?\s*\d+|\d+\s*mi\b/i.test(description);
 }
@@ -501,7 +508,7 @@ function computeReportCard(
         isExcludedLeaveContext ||
         currentProjectLabel.includes('PTO') ||
         currentProjectLabel.includes('SICK') ||
-        currentProjectLabel.includes('COMP');
+        isCompTimeContext(currentProjectLabel);
       if (!excludedForAccruedPTO) {
         for (const d of dates) {
           const hrs = row.dateValues[d] ?? 0;
@@ -517,7 +524,7 @@ function computeReportCard(
             if (!accruedPTOExclusionReasonsByDate[d]) accruedPTOExclusionReasonsByDate[d] = new Set<string>();
             if (currentProjectLabel.includes('PTO')) accruedPTOExclusionReasonsByDate[d].add('PTO');
             if (currentProjectLabel.includes('SICK')) accruedPTOExclusionReasonsByDate[d].add('Sick');
-            if (currentProjectLabel.includes('COMP')) accruedPTOExclusionReasonsByDate[d].add('Comp Time');
+            if (isCompTimeContext(currentProjectLabel)) accruedPTOExclusionReasonsByDate[d].add('Comp Time');
           }
         }
       }
@@ -540,7 +547,7 @@ function computeReportCard(
         (
           currentProjectLabel.includes('VACATION') ||
           currentProjectLabel.includes('PTO') ||
-          (currentProjectLabel.includes('COMP') &&
+          (isCompTimeContext(currentProjectLabel) &&
             isFullTimeHourly(employeeName, categorySets))
         )
       ) {
@@ -550,7 +557,7 @@ function computeReportCard(
           if (hrs > 0) ptoByDate[d] = (ptoByDate[d] ?? 0) + hrs;
         }
       } else if (
-        currentProjectLabel.includes('COMP') &&
+        isCompTimeContext(currentProjectLabel) &&
         isFullTimeSalaried(employeeName, categorySets)
       ) {
         for (const d of dates) {
