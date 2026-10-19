@@ -49,6 +49,8 @@ interface HighlightReviewProps {
   downloadDisabled?: boolean;
   downloading?: boolean;
   sendingEmail?: boolean;
+  /** Employees in the loaded report — 1 downloads PDF, 2+ downloads ZIP. */
+  employeeCount?: number;
   periodStart?: string;
   periodEnd?: string;
   onHistoryPersisted?: (entry: ReviewHistoryEntry) => void;
@@ -71,12 +73,21 @@ export function HighlightReview({
   downloadDisabled = false,
   downloading = false,
   sendingEmail = false,
+  employeeCount = 0,
   periodStart = '',
   periodEnd = '',
   onHistoryPersisted,
   onHistoryCleared,
 }: HighlightReviewProps) {
   const groups = useMemo(() => groupProposalsByEmployee(proposals), [proposals]);
+  const singleEmployee = employeeCount === 1;
+  const downloadLabel = singleEmployee
+    ? 'Download PDF'
+    : 'Download ZIP (all employee PDFs)';
+  const downloadLabelResolved = singleEmployee
+    ? 'Download PDF'
+    : 'Download ZIP (accepted highlights only)';
+  const preparingLabel = singleEmployee ? 'Preparing PDF…' : 'Preparing ZIP…';
   const [fileIndex, setFileIndex] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTrigger, setDraftTrigger] = useState('');
@@ -436,7 +447,7 @@ export function HighlightReview({
           disabled={downloadDisabled || downloading}
           className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {downloading ? 'Preparing ZIP…' : 'Download ZIP (all employee PDFs)'}
+          {downloading ? preparingLabel : downloadLabel}
         </button>
         {emailPanel}
       </div>
@@ -762,9 +773,7 @@ export function HighlightReview({
             disabled={!allResolved || downloadDisabled || downloading}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {downloading
-              ? 'Preparing ZIP…'
-              : 'Download ZIP (accepted highlights only)'}
+            {downloading ? preparingLabel : downloadLabelResolved}
           </button>
           {allResolved ? emailPanel : null}
         </div>

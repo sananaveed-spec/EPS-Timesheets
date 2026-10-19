@@ -75,7 +75,8 @@ export async function fetchClockifyDetailedRange(
     }
 
     const rows = payload.rows ?? [];
-    if (rows.length === 0) {
+    // Allow empty entries when employees were selected — zero-hour PDFs still generate.
+    if (rows.length === 0 && (!employeeNames || employeeNames.length === 0)) {
       return {
         success: false,
         error: 'No time entries found for the selected date range and employees.',

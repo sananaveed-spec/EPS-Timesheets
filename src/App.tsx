@@ -24,7 +24,11 @@ import {
   acquireMailAccessToken,
   sendTimesheetMail,
 } from './lib/graphMail';
-import { buildPdfsZipBlob, generatePdfsZip } from './lib/pdfGenerator';
+import {
+  buildPdfsZipBlob,
+  countPivotEmployees,
+  downloadTimesheetReports,
+} from './lib/pdfGenerator';
 import { transformToPivot } from './lib/transformer';
 import {
   loadManagedUsers,
@@ -102,10 +106,14 @@ function AppContent() {
         (result) => {
           setLoading(false);
           if (result.success) {
-            const nextPivot = transformToPivot(result.data, {
-              startDate,
-              endDate,
-            });
+            const nextPivot = transformToPivot(
+              result.data,
+              {
+                startDate,
+                endDate,
+              },
+              employeeNames,
+            );
             // Block the review UI until history is applied so Accept/Delete
             // cannot overwrite saved edits with freshly generated defaults.
             setProposalsLoading(true);
@@ -148,15 +156,17 @@ function AppContent() {
     [managedUsers, mentionUsers],
   );
 
-  const handleDownloadZip = useCallback(async () => {
+  const employeeCount = pivot ? countPivotEmployees(pivot) : 0;
+
+  const handleDownload = useCallback(async () => {
     if (!pivot) return;
     setDownloading(true);
     try {
       const baseName =
         sourceLabel?.replace(/\s+/g, '-') || 'clockify-time-reports';
-      await generatePdfsZip(
+      await downloadTimesheetReports(
         pivot,
-        `${baseName}.zip`,
+        baseName,
         revNumber,
         managedUsers,
         getAcceptedHighlights(highlightProposals),
@@ -448,11 +458,12 @@ function AppContent() {
                     onHistoryPersisted={handleHistoryPersisted}
                     onHistoryCleared={handleHistoryCleared}
                     onDownload={() => {
-                      void handleDownloadZip();
+                      void handleDownload();
                     }}
                     onSendEmail={handleSendEmail}
                     downloading={downloading}
                     sendingEmail={sendingEmail}
+                    employeeCount={employeeCount}
                   />
                 )}
               </>

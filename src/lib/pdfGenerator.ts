@@ -288,11 +288,19 @@ function isFmlaLeaveContext(value: string): boolean {
   return /\bFMLA\b/.test(value.toUpperCase());
 }
 
-/** Comp Time leave — not "company", "compensation", etc. */
+/** Comp / Compensation Time leave — not bare "company". */
 function isCompTimeContext(value: string): boolean {
   const normalized = value.toUpperCase();
-  // Word-boundary COMP so "COMPANY" / "COMPENSATION" do not match.
-  return /\bCOMP(\s*[-]?\s*TIME)?\b/.test(normalized);
+  // EPS project label: "*EPS Admin: Compensation Time"
+  if (/\bCOMPENSATION\s+TIME\b/.test(normalized)) return true;
+  // "Comp Time", "Comp-Time", "Comp Hours"
+  if (/\bCOMP(\s*[-]?\s*TIME|\s+HOURS)\b/.test(normalized)) return true;
+  // Whole-word COMP alone — not COMPANY / COMPENSATION
+  return (
+    /\bCOMP\b/.test(normalized) &&
+    !/\bCOMPANY\b/.test(normalized) &&
+    !/\bCOMPENSATION\b/.test(normalized)
+  );
 }
 
 function hasMiles(description: string): boolean {
@@ -1461,24 +1469,12 @@ const columnStyles = {
   return zipBlob;
 }
 
-export async function generatePdfsZip(
-  pivot: PivotData,
-  zipFilename = 'time-reports.zip',
-  revNumber = 1,
-  managedUsers: ManagedUser[] = [],
-  acceptedHighlights: HighlightProposal[] = [],
-): Promise<void> {
-  const zipBlob = await buildPdfsZipBlob(
-    pivot,
-    revNumber,
-    managedUsers,
-    acceptedHighlights,
-  );
-  const url = URL.createObjectURL(zipBlob);
+function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
   // Ensure browsers reliably treat this as a download (not a navigation).
   const a = document.createElement('a');
   a.href = url;
-  a.download = zipFilename;
+  a.download = filename;
   a.target = '_self';
   a.rel = 'noopener';
 
@@ -1488,4 +1484,67 @@ export async function generatePdfsZip(
 
   // Revoke later to avoid interrupting the download in some browsers.
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+export function countPivotEmployees(pivot: PivotData): number {
+  return splitRowsByUser(pivot.rows).length;
+}
+
+/**
+ * One employee → download a single PDF.
+ * Multiple employees → download a ZIP of PDFs.
+ */
+export async function downloadTimesheetReports(
+  pivot: PivotData,
+  baseFilename = 'time-reports',
+  revNumber = 1,
+  managedUsers: ManagedUser[] = [],
+  acceptedHighlights: HighlightProposal[] = [],
+): Promise<'pdf' | 'zip'> {
+  const sections = splitRowsByUser(pivot.rows);
+  const zipBlob = await buildPdfsZipBlob(
+    pivot,
+    revNumber,
+    managedUsers,
+    acceptedHighlights,
+  );
+
+  if (sections.length === 1) {
+    const zip = await JSZip.loadAsync(zipBlob);
+    const expectedName = `${sanitizeFilename(sections[0].name)}.pdf`;
+    const pdfEntry =
+      zip.file(expectedName) ??
+      Object.values(zip.files).find(
+        (file) => !file.dir && file.name.toLowerCase().endsWith('.pdf'),
+      );
+    if (!pdfEntry) {
+      throw new Error('PDF was not generated for the selected employee.');
+    }
+    const pdfBytes = await pdfEntry.async('blob');
+    const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+    triggerBrowserDownload(pdfBlob, expectedName);
+    return 'pdf';
+  }
+
+  const zipFilename = baseFilename.toLowerCase().endsWith('.zip')
+    ? baseFilename
+    : `${baseFilename}.zip`;
+  triggerBrowserDownload(zipBlob, zipFilename);
+  return 'zip';
+}
+
+export async function generatePdfsZip(
+  pivot: PivotData,
+  zipFilename = 'time-reports.zip',
+  revNumber = 1,
+  managedUsers: ManagedUser[] = [],
+  acceptedHighlights: HighlightProposal[] = [],
+): Promise<void> {
+  await downloadTimesheetReports(
+    pivot,
+    zipFilename.replace(/\.zip$/i, ''),
+    revNumber,
+    managedUsers,
+    acceptedHighlights,
+  );
 }

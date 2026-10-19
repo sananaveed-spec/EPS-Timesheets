@@ -1,4 +1,5 @@
 import type { ClockifyRow, PivotData, PivotRow } from '../types';
+import { sameEmployeeName } from './employeeCategories';
 
 function parseDate(dateStr: string): Date | null {
   const parts = dateStr.trim().split('/');
@@ -120,17 +121,95 @@ export type TransformDateRange = {
   endDate: string;
 };
 
+function emptyUserSection(user: string, dates: string[]): PivotRow[] {
+  const userDateTotals: Record<string, number> = {};
+  for (const d of dates) userDateTotals[d] = 0;
+  return [
+    {
+      label: user,
+      indentLevel: 0,
+      dateValues: {},
+      grandTotal: 0,
+    },
+    {
+      label: `${user} Total`,
+      indentLevel: 0,
+      dateValues: userDateTotals,
+      grandTotal: 0,
+      isEmployeeTotal: true,
+    },
+  ];
+}
+
+/** Preserve selection order; include selected people even with 0 hours. */
+function resolveUsersForPivot(
+  byUser: Map<string, ClockifyRow[]>,
+  selectedEmployees?: string[],
+): string[] {
+  if (!selectedEmployees || selectedEmployees.length === 0) {
+    return Array.from(byUser.keys()).sort((a, b) => a.localeCompare(b));
+  }
+
+  const matchedKeys = new Set<string>();
+  const ordered: string[] = [];
+
+  for (const selected of selectedEmployees) {
+    const name = selected.trim();
+    if (!name) continue;
+    const match = Array.from(byUser.keys()).find((key) =>
+      sameEmployeeName(key, name),
+    );
+    if (match) {
+      ordered.push(match);
+      matchedKeys.add(match);
+    } else {
+      ordered.push(name);
+    }
+  }
+
+  for (const key of byUser.keys()) {
+    if (matchedKeys.has(key)) continue;
+    if (ordered.some((name) => sameEmployeeName(name, key))) continue;
+    ordered.push(key);
+  }
+
+  return ordered;
+}
+
 export function transformToPivot(
   rows: ClockifyRow[],
   dateRange?: TransformDateRange,
+  /** Selected Manage Users names — included even when they have 0 hours. */
+  selectedEmployees?: string[],
 ): PivotData {
-  // Detail table columns: only days that have time entries.
-  const dates = getUniqueDatesFromCsv(rows);
-  const dateLabels = dates.map(formatDateLabel);
-
   const rangeDates = dateRange
     ? getDatesInRange(dateRange.startDate, dateRange.endDate)
     : null;
+
+  // Detail columns: days with entries; if none, use selected period days.
+  const entryDates: string[] = [];
+  {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const key = normalizeDateKey(row['Start Date']?.trim() || '');
+      if (key) seen.add(key);
+    }
+    entryDates.push(
+      ...Array.from(seen).sort((a, b) => {
+        const da = parseDate(a)?.getTime() ?? 0;
+        const db = parseDate(b)?.getTime() ?? 0;
+        return da - db;
+      }),
+    );
+  }
+  const dates =
+    entryDates.length > 0
+      ? entryDates
+      : rangeDates && rangeDates.length > 0
+        ? rangeDates
+        : getUniqueDatesFromCsv(rows);
+  const dateLabels = dates.map(formatDateLabel);
+
   const periodStart =
     rangeDates && rangeDates.length > 0 ? rangeDates[0] : dates[0];
   const periodEnd =
@@ -147,10 +226,14 @@ export function transformToPivot(
     byUser.get(user)!.push(row);
   }
 
-  const sortedUsers = Array.from(byUser.keys()).sort();
+  const sortedUsers = resolveUsersForPivot(byUser, selectedEmployees);
 
   for (const user of sortedUsers) {
-    const userRows = byUser.get(user)!;
+    const userRows = byUser.get(user) ?? [];
+    if (userRows.length === 0) {
+      pivotRows.push(...emptyUserSection(user, dates));
+      continue;
+    }
 
     pivotRows.push({
       label: user,
@@ -248,7 +331,9 @@ export function transformToPivot(
   }
 
   const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-  const firstDate = dates[0] ? parseDate(dates[0]) : new Date();
+  const firstDate = dates[0]
+    ? parseDate(dates[0]) ?? parseFlexibleDate(dates[0])
+    : new Date();
   const month = firstDate ? monthNames[firstDate.getMonth()] : 'REPORT';
   const printedDate = new Date();
   const reportTitle = `${month} REV1 PRINTED ${printedDate.getMonth() + 1}/${printedDate.getDate()}/${printedDate.getFullYear()}`;
