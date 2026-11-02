@@ -81,14 +81,19 @@ export function getTimeEntrySeconds(entry: ClockifyTimeEntry): number {
   const fromDuration = parseIsoDurationToSeconds(entry.timeInterval.duration);
   if (fromDuration > 0) return fromDuration;
 
+  // Running timers (no end) must not invent payroll hours from wall-clock now.
   if (!entry.timeInterval.end) {
-    const startMs = new Date(entry.timeInterval.start).getTime();
-    return Math.max(Math.floor((Date.now() - startMs) / 1000), 0);
+    return 0;
   }
 
   const startMs = new Date(entry.timeInterval.start).getTime();
   const endMs = new Date(entry.timeInterval.end).getTime();
   return Math.max(Math.floor((endMs - startMs) / 1000), 0);
+}
+
+/** Finished entries only — open timers inflate days (e.g. 300+h “No project”). */
+export function isFinishedTimeEntry(entry: ClockifyTimeEntry): boolean {
+  return Boolean(entry.timeInterval?.end);
 }
 
 /**
@@ -346,9 +351,11 @@ export async function fetchDetailedRowsForRange(
       startISO,
       endISO,
     );
-    return entries.map((entry) =>
-      mapEntryToCsvRow(entry, userById.get(user.id) ?? user, timezone),
-    );
+    return entries
+      .filter(isFinishedTimeEntry)
+      .map((entry) =>
+        mapEntryToCsvRow(entry, userById.get(user.id) ?? user, timezone),
+      );
   });
 
   return entryBatches.flat();
