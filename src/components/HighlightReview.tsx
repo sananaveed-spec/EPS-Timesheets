@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { HighlightProposal } from '../lib/highlightRules';
-import { groupProposalsByEmployee } from '../lib/highlightRules';
+import {
+  formatTaskDuration,
+  groupProposalsByEmployee,
+} from '../lib/highlightRules';
 import {
   DEFAULT_EMAIL_PRESETS,
   EMAIL_REPORT_OFFICES,
@@ -567,6 +570,9 @@ export function HighlightReview({
                 <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
                   {item.ruleLabel}
                 </span>
+                <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-800">
+                  {formatTaskDuration(item.hours ?? 0)}
+                </span>
                 <span className="text-xs uppercase tracking-wide text-gray-500">
                   {item.status}
                 </span>
@@ -576,6 +582,9 @@ export function HighlightReview({
                 <p className="mt-2 text-xs text-gray-500">
                   Project: {item.projectLabel}
                   {item.tag ? ` · Tag: ${item.tag}` : ''}
+                  {typeof item.hours === 'number' && item.hours > 0
+                    ? ` · Time: ${formatTaskDuration(item.hours)}`
+                    : ''}
                 </p>
               )}
 

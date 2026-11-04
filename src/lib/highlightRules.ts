@@ -43,6 +43,19 @@ export interface HighlightProposal {
   tag: string;
   comment: string;
   status: HighlightStatus;
+  /** Clockify row total hours for this description task. */
+  hours: number;
+}
+
+/** e.g. 8h · 1h 30m · 45m */
+export function formatTaskDuration(hours: number): string {
+  if (!Number.isFinite(hours) || hours <= 0) return '0m';
+  const totalMinutes = Math.round(hours * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
 }
 
 function firstName(employeeName: string): string {
@@ -925,6 +938,7 @@ export function proposeHighlights(
           triggerText: sentenceContaining(desc, travelPatterns) || desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions,
             'Mention who drove, so the miles can be tracked against that person’s entry.',
           ),
@@ -941,6 +955,7 @@ export function proposeHighlights(
           triggerText: zeroMilesSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment:
             withMentions(mentions,
               'If miles are 0 then why it is mentioned? may be a typo?',
@@ -961,6 +976,7 @@ export function proposeHighlights(
           triggerText: hoursSentence || desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions, 'May need to split this entry.'),
         });
       }
@@ -980,6 +996,7 @@ export function proposeHighlights(
           triggerText: milesSentence || desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions,
             'Miles are mentioned. This may be billable/Future billable?',
           ),
@@ -1035,6 +1052,7 @@ export function proposeHighlights(
             triggerText: futureSentence,
             projectLabel: currentProjectLabel,
             tag: currentTag,
+          hours: row.grandTotal,
             comment: futureComment,
           });
         }
@@ -1060,6 +1078,7 @@ export function proposeHighlights(
           triggerText: openJobSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions,
             'Kindly shift this to specific job category, or create a job number and send to him',
           ),
@@ -1102,6 +1121,7 @@ export function proposeHighlights(
           triggerText: billableSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions, 'Billable?'),
         });
       }
@@ -1134,6 +1154,7 @@ export function proposeHighlights(
           triggerText: codingSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions, 'Charge to correct job?'),
         });
       }
@@ -1158,6 +1179,7 @@ export function proposeHighlights(
             triggerText: desc.trim(),
             projectLabel: currentProjectLabel,
             tag: currentTag,
+          hours: row.grandTotal,
             comment: withMentions(mentions,
               `${workedHolidayDates.join(', ')} was a federal holiday. Will the hours worked be added to Comp Time?`,
             ),
@@ -1175,6 +1197,7 @@ export function proposeHighlights(
           triggerText: sickSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: `${employeeFirst}..... Use EPS Admin: Sick Time as project category`,
         });
       }
@@ -1198,6 +1221,7 @@ export function proposeHighlights(
           triggerText: internalNoteSentence,
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions, 'please note this point'),
         });
       }
@@ -1212,6 +1236,7 @@ export function proposeHighlights(
           triggerText: desc.trim(),
           projectLabel: currentProjectLabel,
           tag: currentTag,
+          hours: row.grandTotal,
           comment: withMentions(mentions,
             'Review this Admin/Office Time entry.',
           ),
